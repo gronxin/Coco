@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q
+      - name: Prepare Windows launcher check
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          py -3 -m venv .venv
+          .venv\Scripts\python.exe -m pip install -r requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Check Windows launcher
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: run.cmd --check
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: frontend

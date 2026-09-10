@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.data/
+frontend/node_modules/
+frontend/dist/
+artifacts/
+*.sqlite*
+.DS_Store
+*.pid
+*.tsbuildinfo
+.superpowers/
+docs/superpowers/
