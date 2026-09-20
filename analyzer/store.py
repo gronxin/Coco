@@ -1,6 +1,7 @@
 """Transactional incremental importer. SQLite writes stay in the analyzer directory."""
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 from collections import defaultdict
@@ -26,6 +27,33 @@ def _safe_title(value, task_id):
     if not title or lowered.startswith(generated_prefixes):
         return '任务 ' + task_id[:8]
     return (title[:157] + '…') if len(title) > 160 else title
+
+
+def _project_for_cwd(cwd, direct_project_id, projects, roots):
+    """Resolve Codex sidebar projects; current Codex links them through project_roots."""
+    if direct_project_id in projects:
+        return projects[direct_project_id]
+    if not cwd:
+        return None
+    target = os.path.normcase(os.path.normpath(cwd))
+    matches = []
+    for project_id, root in roots:
+        normalized = os.path.normcase(os.path.normpath(root))
+        try:
+            if os.path.commonpath((target, normalized)) == normalized:
+                matches.append((len(normalized), projects.get(project_id)))
+        except ValueError:
+            continue
+    matches = [item for item in matches if item[1]]
+    return max(matches, default=(0, None))[1]
+
+
+def _fallback_task_title(meta, task_id):
+    if meta.get('thread_source') == 'guardian_review' or meta.get('subagent_type') == 'guardian':
+        return '权限审批审查'
+    if meta.get('subagent_type') == 'thread_spawn':
+        return '子代理任务 ' + task_id[:8]
+    return '任务 ' + task_id[:8]
 
 
 def now():
@@ -192,9 +220,18 @@ class Store:
             try:
                 con.execute('PRAGMA query_only=ON')
                 cols = {r[1] for r in con.execute('PRAGMA table_info(threads)')}
-                names = [n for n in ('id', 'title', 'cwd', 'updated_at', 'archived') if n in cols]
+                names = [n for n in ('id', 'title', 'name', 'cwd', 'updated_at', 'archived', 'project_id') if n in cols]
+                project_cols = {r[1] for r in con.execute('PRAGMA table_info(projects)')}
+                projects = {}
+                if {'id','name'} <= project_cols:
+                    projects = dict(con.execute('SELECT id,name FROM projects'))
+                root_cols = {r[1] for r in con.execute('PRAGMA table_info(project_roots)')}
+                roots = list(con.execute('SELECT project_id,path FROM project_roots')) if {'project_id','path'} <= root_cols else []
                 if 'id' in names:
-                    tasks.update({r['id']: dict(r) for r in con.execute('SELECT ' + ','.join(names) + ' FROM threads')})
+                    for row in con.execute('SELECT ' + ','.join(names) + ' FROM threads'):
+                        item = dict(row)
+                        item['codex_project_name'] = _project_for_cwd(item.get('cwd'), item.get('project_id'), projects, roots)
+                        tasks[item['id']] = item
                 if con.execute("SELECT 1 FROM sqlite_master WHERE name='thread_spawn_edges'").fetchone():
                     edges.update(dict(con.execute('SELECT child_thread_id,parent_thread_id FROM thread_spawn_edges')))
             finally:
@@ -214,17 +251,30 @@ class Store:
             meta, task, annotated = annotate(events, path)
             task_sources[path] = task
             m = metadata.get(task, {})
-            title = _safe_title(m.get('title'), task)
+            fallback_title = _fallback_task_title(meta, task)
+            generated_default = '任务 ' + task[:8]
+            title = _safe_title(m.get('title'), task) if m.get('title') else fallback_title
+            window_name = _safe_title(m.get('name') or m.get('title'), task) if (m.get('name') or m.get('title')) else fallback_title
+            # State metadata for internal review tasks contains a transcript, not a user-facing title.
+            if title == generated_default:
+                title = fallback_title
+            if window_name == generated_default:
+                window_name = fallback_title
+            codex_project = m.get('codex_project_name') or '未加入 Codex 项目'
             project = m.get('cwd') or meta.get('cwd') or '未归属项目'
             if self.privacy_mode:
                 title = '任务 ' + task[:8]
+                window_name = title
+                if codex_project != '未加入 Codex 项目':
+                    codex_project = 'Codex 项目 ' + hashlib.sha256(codex_project.encode()).hexdigest()[:10]
                 if project != '未归属项目':
                     project = '项目 ' + hashlib.sha256(project.encode()).hexdigest()[:10]
             tasks[task] = dict(id=task, title=title,
-                               project=project,
+                               project=project, codex_project=codex_project, window_name=window_name,
                                updated_at=max((e['timestamp'] or '' for e in events), default=''),
                                parent_id=edges.get(task) or meta.get('parent_id'), forked_from_id=meta.get('forked_from_id'),
-                               cli_version=meta.get('cli_version'), archived=bool(m.get('archived')))
+                               cli_version=meta.get('cli_version'), archived=bool(m.get('archived')),
+                               thread_source=meta.get('thread_source'), subagent_type=meta.get('subagent_type'))
             for e in annotated:
                 if e.get('turn_id'):
                     # Original files start before their own turns; copied history predates fork metadata.
@@ -239,7 +289,7 @@ class Store:
             issues.extend(found)
             for row in rows:
                 if row['task_id'] not in tasks:
-                    tasks[row['task_id']] = dict(id=row['task_id'], title='未归属用量' if row['task_id']=='unassigned' else '任务 '+row['task_id'][:8], project='未归属项目', updated_at=row['timestamp'] or '', parent_id=None)
+                    tasks[row['task_id']] = dict(id=row['task_id'], title='未归属用量' if row['task_id']=='unassigned' else '任务 '+row['task_id'][:8], project='未归属项目', codex_project='未加入 Codex 项目', window_name='未归属用量' if row['task_id']=='unassigned' else '任务 '+row['task_id'][:8], updated_at=row['timestamp'] or '', parent_id=None)
                 old = ledger.get(row['id'])
                 if old and any(old[k] != row[k] for k in FIELDS):
                     issues.append(dict(task_id=row['task_id'], path=path, line=row['source_line'], code='duplicate_conflict', message='同一请求 ID 的用量不一致，保留原始所属任务记录。'))
@@ -260,8 +310,9 @@ class Store:
 
     def _data_digest(self, con):
         # Stable across DELETE+INSERT rebuilds; changes only when analytical data changes.
+        task_digest=hashlib.sha256('\n'.join(r[0] for r in con.execute('SELECT data FROM tasks ORDER BY id')).encode()).hexdigest()
         return tuple(con.execute("SELECT COUNT(*),COALESCE(SUM(json_extract(data,'$.total_tokens')),0),COALESCE(MAX(json_extract(data,'$.timestamp')),'') FROM ledger").fetchone()) + \
-               tuple(con.execute("SELECT COUNT(*),COALESCE(MAX(json_extract(data,'$.updated_at')),'') FROM tasks").fetchone()) + \
+               (task_digest,) + \
                tuple(con.execute("SELECT COUNT(*),COALESCE(SUM(line),0) FROM issues").fetchone()) + \
                tuple(con.execute("SELECT COUNT(*),COALESCE(MAX(timestamp),''),COALESCE(SUM(failed),0),COALESCE(SUM(source_line),0) FROM activity_events").fetchone())
 
@@ -340,7 +391,7 @@ class Store:
         with self.connect() as con:
             return {r[0] for r in con.execute("SELECT DISTINCT json_extract(data,'$.source_path') FROM ledger WHERE "+' AND '.join(clauses),args) if r[0]}
 
-    def tool_aggregate(self, task_id='', tool='', failed=None, start='', end='', project='', model=''):
+    def tool_aggregate(self, task_id='', tool='', failed=None, start='', end='', project='', model='', codex_project='', window=''):
         clauses=["type IN ('tool','memory')"]; args=[]
         if task_id: clauses.append('task_id=?'); args.append(task_id)
         if tool: clauses.append('tool=?'); args.append(tool)
@@ -348,6 +399,8 @@ class Store:
         if start: clauses.append("date(timestamp,'+8 hours')>=?"); args.append(start)
         if end: clauses.append("date(timestamp,'+8 hours')<=?"); args.append(end)
         if project: clauses.append("json_extract(tasks.data,'$.project')=?"); args.append(project)
+        if codex_project: clauses.append("json_extract(tasks.data,'$.codex_project')=?"); args.append(codex_project)
+        if window: clauses.append("json_extract(tasks.data,'$.window_name')=?"); args.append(window)
         if model: clauses.append("json_extract(activity_events.data,'$.model')=?"); args.append(model)
         with self.connect() as con:
             rows=con.execute('SELECT COALESCE(tool,type) name,COUNT(*) calls,SUM(failed) failures,SUM(COALESCE(json_extract(activity_events.data,"$.associated_tokens"),0)) associated_tokens FROM activity_events LEFT JOIN tasks ON tasks.id=activity_events.task_id WHERE '+' AND '.join(clauses)+' GROUP BY name ORDER BY associated_tokens DESC,calls DESC',args)

@@ -60,6 +60,8 @@ def test_status_is_slim_and_tasks_paginate(client):
     overflow=client.get('/api/tasks?page=9999&page_size=1').json()
     assert overflow['page']==overflow['total_pages']==2 and len(overflow['items'])==1
     assert client.get('/api/issues?page_size=1').json()['page_size']==1
+    options=client.get('/api/options').json()
+    assert {'projects','codex_projects','windows','models'} <= options.keys()
 
 
 def test_analysis_pagination_and_sorted_csv(client):
