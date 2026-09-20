@@ -279,7 +279,9 @@ class Analytics:
     def task_list(self, filters=None, sort='tokens', direction='desc', page=1, page_size=25):
         groups = defaultdict(list)
         for r in self.select(filters):
-            groups[r['task_id']].append(r)
+            root_id = self.tasks[r['task_id']].get('window_root_id')
+            if root_id:
+                groups[root_id].append(r)
         items = []
         for task_id, rows in groups.items():
             models = sorted({r['model'] or '未知' for r in rows})
@@ -302,7 +304,7 @@ class Analytics:
     def descendants(self, task):
         found = {task}
         while True:
-            more = {k for k,v in self.tasks.items() if v.get('parent_id') in found}
+            more = {k for k,v in self.tasks.items() if (v.get('parent_id') or v.get('forked_from_id')) in found}
             if more <= found:
                 return found
             found.update(more)
@@ -347,7 +349,7 @@ class Analytics:
         tree=self._agent_tree(task_id, rows)
         return dict(task=dict(self.tasks[task_id],**metrics),
                     turns=turns,
-                    children=[dict(id=k,title=v['title']) for k,v in self.tasks.items() if v.get('parent_id')==task_id],
+                    children=[dict(id=k,title=v['title']) for k,v in self.tasks.items() if (v.get('parent_id') or v.get('forked_from_id'))==task_id],
                     agent_tree=tree, issue_count=len(issues),reconciliation=dict(exact_tokens=metrics['total_tokens']-metrics['summary_tokens'],
                        summary_tokens=metrics['summary_tokens'],undated_tokens=metrics['undated_tokens'],
                        conflict_count=conflicts,complete=not conflicts and not metrics['summary_tokens']))
@@ -357,7 +359,7 @@ class Analytics:
         for r in selected_rows: rows_by_task[r['task_id']].append(r)
         def node(task_id):
             own=self.aggregate(rows_by_task.get(task_id,[]))
-            children=[node(k) for k,v in self.tasks.items() if v.get('parent_id')==task_id]
+            children=[node(k) for k,v in self.tasks.items() if (v.get('parent_id') or v.get('forked_from_id'))==task_id]
             return dict(id=task_id,title=self.tasks[task_id]['title'],own_tokens=own['total_tokens'],
                         children_tokens=sum(c['combined_tokens'] for c in children),
                         combined_tokens=own['total_tokens']+sum(c['combined_tokens'] for c in children),children=children)
