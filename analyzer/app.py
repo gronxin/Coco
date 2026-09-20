@@ -70,10 +70,10 @@ class Budget(BaseModel):
     currency: Optional[str] = Field(default=None,pattern=r'^[A-Z]{3}$')
 
 
-def filters(start:Optional[date]=None,end:Optional[date]=None,project:str='',model:str='',search:str=''):
+def filters(start:Optional[date]=None,end:Optional[date]=None,project:str='',codex_project:str='',window:str='',model:str='',search:str=''):
     if start and end and start>end:
         raise HTTPException(422,'开始日期不能晚于结束日期')
-    return dict(start=start.isoformat() if start else '',end=end.isoformat() if end else '',project=project,model=model,search=search)
+    return dict(start=start.isoformat() if start else '',end=end.isoformat() if end else '',project=project,codex_project=codex_project,window=window,model=model,search=search)
 
 
 def json_safe(value):
@@ -172,7 +172,11 @@ def create_app(store=None, background=True):
     @app.get('/api/options')
     def options():
         snap=store.snapshot()
-        return dict(projects=sorted({v['project'] for v in snap['tasks'].values()}),models=sorted({r['model'] or '未知' for r in snap['rows']}))
+        tasks=list(snap['tasks'].values())
+        return dict(projects=sorted({v['project'] for v in tasks}),
+                    codex_projects=[{'name':name,'project':project} for project,name in sorted({(v['project'],v.get('codex_project') or '未加入 Codex 项目') for v in tasks})],
+                    windows=[{'name':name,'codex_project':codex_project,'project':project} for project,codex_project,name in sorted({(v['project'],v.get('codex_project') or '未加入 Codex 项目',v.get('window_name') or v['title']) for v in tasks})],
+                    models=sorted({r['model'] or '未知' for r in snap['rows']}))
 
     @app.get('/api/overview')
     def overview(f=Depends(filters)):
@@ -229,7 +233,7 @@ def create_app(store=None, background=True):
 
     @app.get('/api/tools')
     def tools(f=Depends(filters),task_id:str='',tool_category:str='',failed:Optional[bool]=None):
-        return {'items':store.tool_aggregate(task_id,tool_category,failed,f['start'],f['end'],f['project'],f['model']),'causality_note':'关联 Token 表示工具调用之后记录的模型调用用量，仅说明时间相关性，不代表因果。'}
+        return {'items':store.tool_aggregate(task_id,tool_category,failed,f['start'],f['end'],f['project'],f['model'],f['codex_project'],f['window']),'causality_note':'关联 Token 表示工具调用之后记录的模型调用用量，仅说明时间相关性，不代表因果。'}
 
     @app.get('/api/analysis')
     def analysis(f=Depends(filters),call_page:int=Query(1,ge=1),call_page_size:int=Query(10,ge=5,le=50),signal_page:int=Query(1,ge=1),signal_page_size:int=Query(10,ge=5,le=50)):
@@ -259,7 +263,7 @@ def create_app(store=None, background=True):
                 tools_by_task[task['id']]=(sum(x['calls'] for x in grouped),sum(x['failures'] for x in grouped))
                 task['tool_count'],task['tool_failure_count']=tools_by_task[task['id']]
                 task['non_cached_input_tokens']=(task['input_tokens']-task['cached_input_tokens']) if task.get('input_tokens') is not None and task.get('cached_input_tokens') is not None else None
-            fields=['id','title','project','model','updated_at','input_tokens','cached_input_tokens','non_cached_input_tokens','output_tokens','reasoning_output_tokens','visible_output_tokens','total_tokens','call_count','tool_count','tool_failure_count','summary_tokens','undated_tokens','cache_hit_rate','detail_coverage','api_costs','api_cost_breakdown','cache_savings','cache_savings_coverage','subscription_costs','pricing_coverage']
+            fields=['id','window_name','title','project','codex_project','model','updated_at','input_tokens','cached_input_tokens','non_cached_input_tokens','output_tokens','reasoning_output_tokens','visible_output_tokens','total_tokens','call_count','tool_count','tool_failure_count','summary_tokens','undated_tokens','cache_hit_rate','detail_coverage','api_costs','api_cost_breakdown','cache_savings','cache_savings_coverage','subscription_costs','pricing_coverage']
         stream=io.StringIO(newline='')
         writer=csv.DictWriter(stream,fieldnames=fields,extrasaction='ignore')
         writer.writeheader()

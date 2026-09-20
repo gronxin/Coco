@@ -37,13 +37,20 @@ def sanitize(raw):
     event = {'timestamp': timestamp(raw.get('timestamp')), 'type': kind}
     if kind == 'session_meta':
         source = p.get('source')
-        parent = None
+        parent = p.get('parent_thread_id')
+        subagent_type = None
         if isinstance(source, dict):
             sub = source.get('subagent', {})
-            if isinstance(sub, dict) and isinstance(sub.get('thread_spawn'), dict):
-                parent = sub['thread_spawn'].get('parent_thread_id')
+            if isinstance(sub, dict):
+                if isinstance(sub.get('thread_spawn'), dict):
+                    parent = sub['thread_spawn'].get('parent_thread_id') or parent
+                    subagent_type = 'thread_spawn'
+                elif sub.get('other'):
+                    subagent_type = str(sub.get('other'))[:80]
         event.update({k: p.get(k) for k in ('id', 'cwd', 'cli_version', 'forked_from_id')})
         event['parent_id'] = parent
+        event['thread_source'] = str(p.get('thread_source') or '')[:80]
+        event['subagent_type'] = subagent_type
     elif kind == 'turn_context':
         event.update({k: p.get(k) for k in ('turn_id', 'root_turn_id', 'model', 'service_tier')})
     elif kind == 'token_usage_record':

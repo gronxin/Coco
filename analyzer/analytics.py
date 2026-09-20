@@ -91,6 +91,8 @@ class Analytics:
             row = dict(original)
             row['date'] = local_day(row['timestamp'])
             row['project'] = self.tasks[row['task_id']]['project']
+            row['codex_project'] = self.tasks[row['task_id']].get('codex_project') or '未加入 Codex 项目'
+            row['window_name'] = self.tasks[row['task_id']].get('window_name') or self.tasks[row['task_id']]['title']
             row['title'] = self.tasks[row['task_id']]['title']
             costs, price_id, breakdown, savings = api_cost_details(row, snapshot['prices'])
             row.update(api_costs=costs, price_id=price_id, subscription_costs={},
@@ -126,9 +128,13 @@ class Analytics:
                 continue
             if f.get('project') and r['project'] != f['project']:
                 continue
+            if f.get('codex_project') and r['codex_project'] != f['codex_project']:
+                continue
+            if f.get('window') and r['window_name'] != f['window']:
+                continue
             if f.get('model') and (r['model'] or '未知') != f['model']:
                 continue
-            if f.get('search') and f['search'].lower() not in (r['title']+' '+r['task_id']).lower():
+            if f.get('search') and f['search'].lower() not in (r['window_name']+' '+r['title']+' '+r['task_id']).lower():
                 continue
             result.append(r)
         return result

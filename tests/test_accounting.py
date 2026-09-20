@@ -4,7 +4,7 @@ from decimal import Decimal
 from datetime import datetime
 from analyzer.analytics import Analytics,api_cost,api_cost_details
 from analyzer.parser import sanitize
-from analyzer.store import Store, _safe_title
+from analyzer.store import Store, _safe_title, _project_for_cwd, _fallback_task_title
 from analyzer.quota import _JsonLineReader, _codex_command, quota_forecast
 
 
@@ -32,8 +32,53 @@ def test_privacy_mode_masks_title_and_project(fixture_store):
     assert private.sync()
     task = private.snapshot()['tasks']['t']
     assert task['title'] == '任务 t'
+    assert task['window_name'] == '任务 t'
     assert task['project'].startswith('项目 ')
     assert '/project' not in task['project']
+
+
+def test_codex_project_and_window_metadata_are_imported(fixture_store):
+    import sqlite3
+    store,write=fixture_store
+    write([meta(),context(),call()])
+    with sqlite3.connect(store.source_root/'state_5.sqlite') as con:
+        con.execute('CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT)')
+        con.execute('CREATE TABLE project_roots(project_id TEXT,position INTEGER,path TEXT)')
+        con.execute('CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,name TEXT,cwd TEXT,updated_at INTEGER,archived INTEGER,project_id TEXT)')
+        con.execute('INSERT INTO projects VALUES (?,?)',('p','AI办公日常问题场景'))
+        con.execute('INSERT INTO project_roots VALUES (?,?,?)',('p',0,'/project'))
+        con.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?)',('t','首条用户任务','梳理AI办公问题并设计方案','/project',1,0,None))
+    assert store.sync()
+    task=store.snapshot()['tasks']['t']
+    assert task['codex_project']=='AI办公日常问题场景'
+    assert task['window_name']=='梳理AI办公问题并设计方案'
+    assert task['title']=='首条用户任务'
+    analytics=Analytics(store.snapshot())
+    assert analytics.task_list({'codex_project':'AI办公日常问题场景'})['total']==1
+    assert analytics.task_list({'window':'梳理AI办公问题并设计方案'})['items'][0]['id']=='t'
+
+
+def test_project_root_uses_the_most_specific_ancestor():
+    projects = {'parent': '父项目', 'child': '子项目'}
+    roots = [('parent', '/work'), ('child', '/work/topic')]
+    assert _project_for_cwd('/work/topic/repo', None, projects, roots) == '子项目'
+
+
+def test_internal_tasks_get_explanatory_titles_and_parent_links(fixture_store):
+    store, write = fixture_store
+    event = meta(thread_source='guardian_review', parent_thread_id='parent', source={'subagent': {'other': 'guardian'}})
+    write([event, context(), call()])
+    import sqlite3
+    with sqlite3.connect(store.source_root/'state_5.sqlite') as con:
+        con.execute('CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,name TEXT,cwd TEXT)')
+        con.execute('INSERT INTO threads VALUES (?,?,?,?)',(
+            't', 'The following is the Codex agent history whose request action you are assessing.', None, '/project'))
+    assert store.sync()
+    task = store.snapshot()['tasks']['t']
+    assert task['title'] == '权限审批审查'
+    assert task['window_name'] == '权限审批审查'
+    assert task['parent_id'] == 'parent'
+    assert _fallback_task_title({'subagent_type': 'thread_spawn'}, 'abcdefghi') == '子代理任务 abcdefgh'
 from conftest import u,event,meta,context,call,checkpoint
 
 
