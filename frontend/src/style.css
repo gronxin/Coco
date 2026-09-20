@@ -65,3 +65,22 @@ button,input,select,textarea{font:inherit}textarea{min-width:0;max-width:100%;bo
 @media(max-width:760px){.call-list>summary{align-items:flex-start}.call-list>summary small{font-size:10px}.process-cta>summary{grid-template-columns:34px minmax(0,1fr)}.process-icon{width:32px;height:32px}.process-count{grid-column:2}.process-copy small{font-size:10px}}
 .child-tasks{padding:0;overflow:hidden}.child-tasks>summary{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 20px}.child-tasks>summary>span{display:grid;gap:4px}.child-tasks>summary small{font-size:11px;color:var(--text-muted);font-weight:400}.child-tasks>summary>strong{font:600 13px Menlo,Consolas,monospace;color:var(--accent);white-space:nowrap}.child-task-help{padding:12px 20px;color:var(--text-muted);font-size:11px;border-top:1px solid var(--line);background:var(--surface-soft)}.child-tasks section{padding:0 20px 16px}.child-tasks section h3{display:flex;align-items:center;gap:8px;margin:18px 0 10px}.child-tasks section h3 span{font-size:10px;color:var(--text-muted);font-weight:400}.child-task-list{display:grid;gap:8px}.child-task-list>button{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;text-align:left;padding:12px 14px;background:var(--surface-soft);border-color:var(--line)}.child-task-list>button>span{display:grid;gap:4px;min-width:0}.child-task-list>button>span:last-child{text-align:right}.child-task-list b{overflow:hidden;text-overflow:ellipsis}.child-task-list small{font-size:10px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-heading+.child-tasks{margin-top:14px}@media(max-width:760px){.child-tasks>summary,.child-task-list>button{align-items:flex-start;flex-direction:column}.child-tasks>summary{display:flex}.child-task-list>button{display:flex}.child-task-list>button>span:last-child{text-align:left}}
 .child-task-group{margin:0 20px;border-bottom:1px solid var(--line)}.child-task-group:last-child{border-bottom:0}.child-task-group>summary{display:flex;align-items:center;gap:8px;padding:14px 0}.child-task-group>summary span{font-size:10px;color:var(--text-muted)}.child-task-group>.child-task-list{padding-bottom:14px}
+
+/* Explicit event taxonomy for the per-turn execution trace. */
+.flow-legend{display:flex;flex-wrap:wrap;gap:8px;padding:13px 14px 6px;border-top:1px solid var(--line)}
+.event-badge{display:inline-flex;align-items:center;gap:5px;width:max-content;padding:3px 8px;border-radius:999px;background:var(--surface-soft);border:1px solid var(--line);color:var(--text-soft);font-size:10px;font-weight:650;line-height:1.5;white-space:nowrap}
+.event-badge b{font:600 10px Menlo,Consolas,monospace;color:inherit}
+.badge-planning{color:#a05a13;background:color-mix(in srgb,var(--warning) 12%,var(--surface));border-color:color-mix(in srgb,var(--warning) 35%,var(--line))}
+.badge-reasoning,.badge-memory{color:#7651b5;background:color-mix(in srgb,#8b5fc7 12%,var(--surface));border-color:color-mix(in srgb,#8b5fc7 35%,var(--line))}
+.badge-tool{color:var(--secondary);background:color-mix(in srgb,var(--secondary) 11%,var(--surface));border-color:color-mix(in srgb,var(--secondary) 34%,var(--line))}
+.badge-collaboration{color:#b34f78;background:color-mix(in srgb,#d45b8b 11%,var(--surface));border-color:color-mix(in srgb,#d45b8b 36%,var(--line))}
+.badge-model{color:var(--accent);background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+.badge-compaction{color:var(--warning);background:color-mix(in srgb,var(--warning) 12%,var(--surface));border-color:color-mix(in srgb,var(--warning) 35%,var(--line))}
+.timeline li.flow-planning:before{background:var(--warning)}
+.timeline li.flow-reasoning:before,.timeline li.flow-memory:before{background:#8b5fc7}
+.timeline li.flow-collaboration:before{background:#d45b8b}
+.flow-head>.event-badge{font-size:9px}
+[data-theme="dark"] .badge-planning,[data-theme="dark"] .badge-compaction{color:#ffbd68}
+[data-theme="dark"] .badge-reasoning,[data-theme="dark"] .badge-memory{color:#c7a7ff}
+[data-theme="dark"] .badge-collaboration{color:#ff91bd}
+@media(max-width:760px){.flow-legend{padding-inline:10px}.event-badge{font-size:9px}}

@@ -1,6 +1,8 @@
 import json
 
-from analyzer.activity import clean_request, is_memory_access, read_turn_activity, result_summary, tool_description
+from analyzer.activity import (clean_request, collaboration_target, collaboration_title,
+                               is_memory_access, read_turn_activity, result_summary,
+                               tool_description)
 
 
 def line(event_type, payload, timestamp='2026-09-09T01:00:00Z'):
@@ -38,6 +40,16 @@ def test_tool_descriptions_are_concrete_but_sanitized():
     assert result_summary({'output': 'Script failed: secret detail'}) == '执行失败，详细错误未展示'
 
 
+def test_collaboration_events_expose_action_and_target_not_message():
+    payload = {
+        'namespace': 'collaboration', 'name': 'send_message',
+        'input': json.dumps({'target': '/root/frontend', 'message': 'private delegated work'}),
+    }
+    assert collaboration_title(payload) == '发送协作消息'
+    assert collaboration_target(payload) == '/root/frontend'
+    assert 'private delegated work' not in collaboration_target(payload)
+
+
 def test_read_turn_activity_groups_tools_and_deduplicates(tmp_path):
     root = tmp_path / 'source'
     sessions = root / 'sessions'
@@ -66,14 +78,15 @@ def test_read_turn_activity_groups_tools_and_deduplicates(tmp_path):
         {'name': '浏览器操作', 'count': 1},
     ]
     assert [item['type'] for item in result['timeline']] == [
-        'start', 'context', 'request', 'reasoning', 'memory', 'tool', 'model', 'compaction', 'response'
+        'start', 'context', 'request', 'planning', 'memory', 'tool', 'model', 'compaction', 'response'
     ]
     assert '200,000 tokens' in result['timeline'][0]['detail']
     memory = result['timeline'][4]
     assert memory['tool'] == '读取'
     assert memory['status'] == '已返回' and memory['duration_ms'] == 1000
     assert '.codex/memories/MEMORY.md' in memory['detail']
-    assert '随后发生的可观测操作' in result['timeline'][3]['detail']
+    assert result['timeline'][3]['title'] == '执行规划'
+    assert '规划了下一步' in result['timeline'][3]['detail']
     model = result['timeline'][6]
     assert model['model'] == 'test-model'
     assert model['non_cached_input_tokens'] == 20 and model['total_tokens'] == 110
