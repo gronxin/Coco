@@ -43,8 +43,12 @@ def sanitize(raw):
             sub = source.get('subagent', {})
             if isinstance(sub, dict):
                 if isinstance(sub.get('thread_spawn'), dict):
-                    parent = sub['thread_spawn'].get('parent_thread_id') or parent
+                    spawn = sub['thread_spawn']
+                    parent = spawn.get('parent_thread_id') or parent
                     subagent_type = 'thread_spawn'
+                    event['agent_path'] = str(spawn.get('agent_path') or '')[:160]
+                    event['agent_nickname'] = str(spawn.get('agent_nickname') or '')[:80]
+                    event['agent_depth'] = spawn.get('depth') if isinstance(spawn.get('depth'), int) else None
                 elif sub.get('other'):
                     subagent_type = str(sub.get('other'))[:80]
         event.update({k: p.get(k) for k in ('id', 'cwd', 'cli_version', 'forked_from_id')})

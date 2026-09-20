@@ -103,6 +103,11 @@ def test_subagent_is_nested_under_real_task_window(fixture_store):
     assert len(items) == 1
     assert items[0]['id'] == 'parent'
     assert items[0]['total_tokens'] == 220
+    detail = Analytics(snapshot).detail('parent')
+    assert detail['child_summary']['count'] == 1
+    assert detail['child_summary']['total_tokens'] == 110
+    assert detail['children'][0]['kind'] == 'subagent'
+    assert detail['children'][0]['parent_turn_id'] is None
 from conftest import u,event,meta,context,call,checkpoint
 
 

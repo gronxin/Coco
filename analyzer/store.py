@@ -220,7 +220,7 @@ class Store:
             try:
                 con.execute('PRAGMA query_only=ON')
                 cols = {r[1] for r in con.execute('PRAGMA table_info(threads)')}
-                names = [n for n in ('id', 'title', 'name', 'cwd', 'updated_at', 'archived', 'project_id', 'thread_source', 'originator', 'agent_nickname', 'agent_role') if n in cols]
+                names = [n for n in ('id', 'title', 'name', 'cwd', 'updated_at', 'archived', 'project_id', 'thread_source', 'originator', 'agent_nickname', 'agent_role', 'agent_path') if n in cols]
                 project_cols = {r[1] for r in con.execute('PRAGMA table_info(projects)')}
                 projects = {}
                 if {'id','name'} <= project_cols:
@@ -279,7 +279,10 @@ class Store:
                                updated_at=max((e['timestamp'] or '' for e in events), default=''),
                                parent_id=edges.get(task) or meta.get('parent_id'), forked_from_id=meta.get('forked_from_id'),
                                cli_version=meta.get('cli_version'), archived=bool(m.get('archived')),
-                               thread_source=meta.get('thread_source'), subagent_type=meta.get('subagent_type'),
+                               thread_source=m.get('thread_source') or meta.get('thread_source'), subagent_type=meta.get('subagent_type'),
+                               agent_path=meta.get('agent_path') or m.get('agent_path'),
+                               agent_nickname=meta.get('agent_nickname') or m.get('agent_nickname'),
+                               agent_depth=meta.get('agent_depth'),
                                has_window_metadata=has_window_metadata)
             for e in annotated:
                 if e.get('turn_id'):
