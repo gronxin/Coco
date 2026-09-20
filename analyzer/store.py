@@ -220,7 +220,7 @@ class Store:
             try:
                 con.execute('PRAGMA query_only=ON')
                 cols = {r[1] for r in con.execute('PRAGMA table_info(threads)')}
-                names = [n for n in ('id', 'title', 'name', 'cwd', 'updated_at', 'archived', 'project_id') if n in cols]
+                names = [n for n in ('id', 'title', 'name', 'cwd', 'updated_at', 'archived', 'project_id', 'thread_source', 'originator', 'agent_nickname', 'agent_role') if n in cols]
                 project_cols = {r[1] for r in con.execute('PRAGMA table_info(projects)')}
                 projects = {}
                 if {'id','name'} <= project_cols:
@@ -269,12 +269,18 @@ class Store:
                     codex_project = 'Codex 项目 ' + hashlib.sha256(codex_project.encode()).hexdigest()[:10]
                 if project != '未归属项目':
                     project = '项目 ' + hashlib.sha256(project.encode()).hexdigest()[:10]
+            state_source = m.get('thread_source')
+            is_internal = state_source in ('subagent', 'guardian_review') or meta.get('thread_source') == 'guardian_review'
+            # Old fixtures and older Codex logs may have no state database entry;
+            # treat only those relationship-free records as top-level candidates.
+            has_window_metadata = not is_internal and (bool((m.get('name') or m.get('title') or '').strip()) or not m)
             tasks[task] = dict(id=task, title=title,
                                project=project, codex_project=codex_project, window_name=window_name,
                                updated_at=max((e['timestamp'] or '' for e in events), default=''),
                                parent_id=edges.get(task) or meta.get('parent_id'), forked_from_id=meta.get('forked_from_id'),
                                cli_version=meta.get('cli_version'), archived=bool(m.get('archived')),
-                               thread_source=meta.get('thread_source'), subagent_type=meta.get('subagent_type'))
+                               thread_source=meta.get('thread_source'), subagent_type=meta.get('subagent_type'),
+                               has_window_metadata=has_window_metadata)
             for e in annotated:
                 if e.get('turn_id'):
                     # Original files start before their own turns; copied history predates fork metadata.
@@ -289,12 +295,39 @@ class Store:
             issues.extend(found)
             for row in rows:
                 if row['task_id'] not in tasks:
-                    tasks[row['task_id']] = dict(id=row['task_id'], title='未归属用量' if row['task_id']=='unassigned' else '任务 '+row['task_id'][:8], project='未归属项目', codex_project='未加入 Codex 项目', window_name='未归属用量' if row['task_id']=='unassigned' else '任务 '+row['task_id'][:8], updated_at=row['timestamp'] or '', parent_id=None)
+                    tasks[row['task_id']] = dict(id=row['task_id'], title='未归属用量' if row['task_id']=='unassigned' else '任务 '+row['task_id'][:8], project='未归属项目', codex_project='未加入 Codex 项目', window_name='未归属用量' if row['task_id']=='unassigned' else '关系待确认的历史任务', updated_at=row['timestamp'] or '', parent_id=None, forked_from_id=None, has_window_metadata=False)
                 old = ledger.get(row['id'])
                 if old and any(old[k] != row[k] for k in FIELDS):
                     issues.append(dict(task_id=row['task_id'], path=path, line=row['source_line'], code='duplicate_conflict', message='同一请求 ID 的用量不一致，保留原始所属任务记录。'))
                 if old is None or (task_sources.get(path) == row['task_id'] and task_sources.get(old['source_path']) != old['task_id']):
                     ledger[row['id']] = row
+        # A Codex thread is not necessarily a sidebar task window. Child agents,
+        # forks and legacy internal threads inherit their top-level window; records
+        # without a verifiable root remain explicitly unresolved.
+        def window_root(task_id):
+            seen = set()
+            current = task_id
+            while current in tasks and current not in seen:
+                seen.add(current)
+                item = tasks[current]
+                relation = item.get('parent_id') or item.get('forked_from_id')
+                if relation and relation in tasks:
+                    current = relation
+                    continue
+                return current if item.get('has_window_metadata') else None
+            return None
+        for task_id, item in tasks.items():
+            root_id = window_root(task_id)
+            item['window_root_id'] = root_id
+            item['is_window_root'] = root_id == task_id
+            item['hierarchy_status'] = 'window' if root_id == task_id else 'nested' if root_id else 'unresolved'
+            if root_id and root_id != task_id:
+                root = tasks[root_id]
+                item['window_name'] = root['window_name']
+                item['codex_project'] = root['codex_project']
+                item['project'] = root['project']
+            elif not root_id:
+                item['window_name'] = '关系待确认的历史任务'
         for r in con.execute('SELECT * FROM parse_issues'):
             issues.append(dict(r, task_id=task_sources.get(r['path'], 'unassigned')))
         for path in sources:

@@ -76,9 +76,33 @@ def test_internal_tasks_get_explanatory_titles_and_parent_links(fixture_store):
     assert store.sync()
     task = store.snapshot()['tasks']['t']
     assert task['title'] == '权限审批审查'
-    assert task['window_name'] == '权限审批审查'
+    assert task['window_name'] == '关系待确认的历史任务'
+    assert task['hierarchy_status'] == 'unresolved'
     assert task['parent_id'] == 'parent'
     assert _fallback_task_title({'subagent_type': 'thread_spawn'}, 'abcdefghi') == '子代理任务 abcdefgh'
+
+
+def test_subagent_is_nested_under_real_task_window(fixture_store):
+    import sqlite3
+    store, write = fixture_store
+    write([meta('parent'), context('parent-turn'), call('parent-call', task='parent', turn='parent-turn')], name='parent.jsonl')
+    write([meta('child', parent_thread_id='parent'), context('child-turn'), call('child-call', task='child', turn='child-turn')], name='child.jsonl')
+    with sqlite3.connect(store.source_root/'state_5.sqlite') as con:
+        con.execute('CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,name TEXT,cwd TEXT,thread_source TEXT)')
+        con.executemany('INSERT INTO threads VALUES (?,?,?,?,?)', [
+            ('parent', '首条任务', '真实窗口', '/project', 'user'),
+            ('child', '', None, '/project', 'subagent'),
+        ])
+    assert store.sync()
+    snapshot = store.snapshot()
+    child = snapshot['tasks']['child']
+    assert child['window_root_id'] == 'parent'
+    assert child['window_name'] == '真实窗口'
+    assert child['hierarchy_status'] == 'nested'
+    items = Analytics(snapshot).task_list()['items']
+    assert len(items) == 1
+    assert items[0]['id'] == 'parent'
+    assert items[0]['total_tokens'] == 220
 from conftest import u,event,meta,context,call,checkpoint
 
 

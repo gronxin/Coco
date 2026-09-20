@@ -175,7 +175,7 @@ def create_app(store=None, background=True):
         tasks=list(snap['tasks'].values())
         return dict(projects=sorted({v['project'] for v in tasks}),
                     codex_projects=[{'name':name,'project':project} for project,name in sorted({(v['project'],v.get('codex_project') or '未加入 Codex 项目') for v in tasks})],
-                    windows=[{'name':name,'codex_project':codex_project,'project':project} for project,codex_project,name in sorted({(v['project'],v.get('codex_project') or '未加入 Codex 项目',v.get('window_name') or v['title']) for v in tasks})],
+                    windows=[{'name':name,'codex_project':codex_project,'project':project} for project,codex_project,name in sorted({(v['project'],v.get('codex_project') or '未加入 Codex 项目',v.get('window_name') or v['title']) for v in tasks if v.get('is_window_root')})],
                     models=sorted({r['model'] or '未知' for r in snap['rows']}))
 
     @app.get('/api/overview')
