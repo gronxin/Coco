@@ -347,9 +347,26 @@ class Analytics:
             if include_calls: turn['calls']=v
             turns.append(turn)
         tree=self._agent_tree(task_id, rows)
+        child_ids=self.descendants(task_id)-{task_id}
+        child_rows=defaultdict(list)
+        for row in self.select(filters,child_ids): child_rows[row['task_id']].append(row)
+        child_items=[]
+        for child_id in sorted(child_ids,key=lambda key:self.tasks[key].get('updated_at') or '',reverse=True):
+            child=self.tasks[child_id]
+            source=child.get('thread_source')
+            kind='review' if source=='guardian_review' or child.get('subagent_type')=='guardian' else 'subagent' if source=='subagent' or child.get('parent_id') else 'fork' if child.get('forked_from_id') else 'other'
+            path=(child.get('agent_path') or '').rstrip('/').split('/')[-1]
+            title=child.get('title') or ''
+            label=title if title and not title.startswith(('任务 ','子代理任务 ','权限审批审查')) else path or ({'review':'权限审批审查','subagent':'子代理任务','fork':'分叉任务'}.get(kind,'内部任务'))
+            own=self.aggregate(child_rows.get(child_id,[]))
+            child_items.append(dict(id=child_id,label=label,kind=kind,agent_path=child.get('agent_path'),agent_nickname=child.get('agent_nickname'),
+                                    parent_id=child.get('parent_id'),forked_from_id=child.get('forked_from_id'),parent_turn_id=None,
+                                    archived=child.get('archived'),updated_at=child.get('updated_at'),**own))
+        child_metrics=self.aggregate([row for values in child_rows.values() for row in values])
         return dict(task=dict(self.tasks[task_id],**metrics),
                     turns=turns,
-                    children=[dict(id=k,title=v['title']) for k,v in self.tasks.items() if (v.get('parent_id') or v.get('forked_from_id'))==task_id],
+                    children=child_items,
+                    child_summary=dict(count=len(child_items),total_tokens=child_metrics['total_tokens'],call_count=child_metrics['call_count']),
                     agent_tree=tree, issue_count=len(issues),reconciliation=dict(exact_tokens=metrics['total_tokens']-metrics['summary_tokens'],
                        summary_tokens=metrics['summary_tokens'],undated_tokens=metrics['undated_tokens'],
                        conflict_count=conflicts,complete=not conflicts and not metrics['summary_tokens']))
