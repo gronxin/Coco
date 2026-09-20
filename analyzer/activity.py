@@ -238,6 +238,41 @@ def tool_description(payload):
     return f'调用工具：{namespace + "." if namespace else ""}{name or "未知"}'
 
 
+def collaboration_title(payload):
+    return {
+        'list_agents': '查询代理状态',
+        'spawn_agent': '创建协作代理',
+        'send_message': '发送协作消息',
+        'followup_task': '追加协作任务',
+        'wait_agent': '等待协作代理',
+        'interrupt_agent': '中断协作代理',
+    }.get(payload.get('name'), '协作代理操作')
+
+
+def collaboration_target(payload):
+    """Expose the agent path/name, never the delegated prompt or message body."""
+    value = tool_input(payload)
+    try:
+        arguments = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        arguments = None
+    if not isinstance(arguments, dict):
+        return None
+    target = arguments.get('target') or arguments.get('task_name')
+    if isinstance(target, str) and target.strip():
+        return clean_request(target, 120)
+    targets = arguments.get('targets')
+    if isinstance(targets, list):
+        labels = []
+        for item in targets[:5]:
+            if isinstance(item, dict):
+                label = item.get('threadId') or item.get('target')
+                if isinstance(label, str) and label not in labels:
+                    labels.append(label)
+        return '、'.join(labels) or None
+    return None
+
+
 def is_memory_access(payload):
     """Classify a tool call without returning its arguments to the client."""
     value = tool_input(payload)
@@ -314,10 +349,15 @@ def read_turn_activity(paths, source_root, turn_ids):
     seen_calls, pending_tools = set(), {}
     pending_reasoning, model_actions = {}, {}
 
-    def connect_reasoning(turn, description):
+    def connect_reasoning(turn, description, planning=False):
         item = pending_reasoning.pop(turn, None)
         if item:
-            item['detail'] = f'根据随后发生的可观测操作，本阶段在为“{description}”做准备。'
+            if planning:
+                item['type'] = 'planning'
+                item['title'] = '执行规划'
+                item['detail'] = f'根据随后发生的可观测操作，本阶段规划了下一步：{description}。'
+            else:
+                item['detail'] = f'日志确认模型在生成下一步结果前进行了推理；随后发生：{description}。内部推理原文不可见。'
     for raw_path in sorted(set(paths)):
         path = Path(raw_path).resolve()
         if path.suffix != '.jsonl' or root not in path.parents or not path.is_file():
@@ -389,7 +429,7 @@ def read_turn_activity(paths, source_root, turn_ids):
                         total_tokens=total_tokens))
                     continue
                 if event_type == 'compacted':
-                    connect_reasoning(active, '压缩并重建上下文')
+                    connect_reasoning(active, '压缩并重建上下文', planning=True)
                     timelines[active].append(flow_event(
                         'compaction', event.get('timestamp'), line_number, '上下文压缩',
                         detail='日志记录了压缩事件，不展示压缩后的对话内容。'))
@@ -436,11 +476,17 @@ def read_turn_activity(paths, source_root, turn_ids):
                         seen_calls.add(identity)
                     group = '读取记忆' if is_memory_access(payload) else tool_group(payload)
                     description = tool_description(payload)
-                    connect_reasoning(active, description)
+                    connect_reasoning(active, description, planning=True)
                     tools[active][group] += 1
+                    is_collaboration = payload.get('namespace') == 'collaboration'
+                    kind = 'memory' if group == '读取记忆' else ('collaboration' if is_collaboration else 'tool')
+                    title = collaboration_title(payload) if is_collaboration else group
+                    target = collaboration_target(payload) if is_collaboration else None
+                    if target:
+                        description += f'；目标：{target}'
                     item = flow_event(
-                        'memory' if group == '读取记忆' else 'tool', event.get('timestamp'), line_number,
-                        group, tool=tool_group(payload), model=model, detail=description,
+                        kind, event.get('timestamp'), line_number,
+                        title, tool=tool_group(payload), model=model, detail=description,
                         status='等待返回', duration_ms=None)
                     timelines[active].append(item)
                     model_actions[active] = f'产生了工具请求：{description}'
