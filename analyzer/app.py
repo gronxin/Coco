@@ -180,7 +180,13 @@ def create_app(store=None, background=True):
 
     @app.get('/api/overview')
     def overview(f=Depends(filters)):
-        return json_safe(analytics().overview(f))
+        result=analytics().overview(f)
+        result['quota']=store.quota_status()
+        return json_safe(result)
+
+    @app.get('/api/quota')
+    def quota():
+        return store.quota_status()
 
     @app.get('/api/tasks')
     def tasks(f=Depends(filters),sort:str=Query('tokens',pattern='^(tokens|time|cost)$'),direction:str=Query('desc',pattern='^(asc|desc)$'),page:int=Query(1,ge=1),page_size:int=Query(25,ge=1,le=100)):

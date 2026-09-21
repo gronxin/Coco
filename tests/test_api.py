@@ -82,6 +82,8 @@ def test_tools_budgets_snapshot_and_period_comparison(client):
     assert client.delete('/api/budgets/'+str(saved.json()['id'])).status_code==204
     overview=client.get('/api/overview').json()
     assert 'previous' in overview['today'] and 'token_change' in overview['week'] and 'calendar' in overview
+    assert overview['quota']['status']=='unavailable'
+    assert client.get('/api/quota').json()['status']=='unavailable'
     snap=client.get('/api/export.snapshot.json').json()
     assert snap['format']=='codex-token-snapshot' and 'daily' in snap and 'conversation' not in snap
 
