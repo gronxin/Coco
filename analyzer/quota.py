@@ -4,9 +4,11 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 
 def quota_forecast(value, now=None):
@@ -89,9 +91,20 @@ class _JsonLineReader:
                 return value
 
 
+def _bundled_codex_paths():
+    if sys.platform != 'darwin':
+        return ()
+    relative = Path('Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex')
+    apps = ('ChatGPT.app', 'Codex.app')
+    return tuple(root / app / relative for root in (Path('/Applications'), Path.home() / 'Applications') for app in apps)
+
+
 def _codex_command(system=None, executable=None):
     system = system or os.name
     executable = executable or shutil.which('codex')
+    if not executable:
+        executable = next((str(path) for path in _bundled_codex_paths()
+                           if path.is_file() and os.access(path, os.X_OK)), None)
     if not executable:
         raise FileNotFoundError('未找到 codex 命令，请先安装 Codex CLI 并加入 PATH')
     if system == 'nt' and executable.lower().endswith(('.cmd','.bat')):
