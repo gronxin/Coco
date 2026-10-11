@@ -308,6 +308,16 @@ def test_native_codex_executable_does_not_use_shell():
     ]
 
 
+def test_bundled_codex_is_found_without_path(monkeypatch, tmp_path):
+    import analyzer.quota as quota
+    bundled = tmp_path / 'codex'
+    bundled.write_text('')
+    bundled.chmod(0o755)
+    monkeypatch.setattr(quota.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(quota, '_bundled_codex_paths', lambda: (bundled,))
+    assert _codex_command() == [str(bundled), 'app-server', '--stdio']
+
+
 def test_rate_limit_states_are_transition_deduplicated(fixture_store):
     store,write=fixture_store
     def state(reached,time):

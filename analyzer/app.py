@@ -3,8 +3,10 @@ import csv
 import io
 import json
 import os
+import signal
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -21,6 +23,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .analytics import Analytics
 from .activity import merge_work_steps, read_turn_activity
 from .store import Store
+from .night_queue import NightQueue
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -70,6 +73,32 @@ class Budget(BaseModel):
     currency: Optional[str] = Field(default=None,pattern=r'^[A-Z]{3}$')
 
 
+class QueueItemInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    title: str = Field(min_length=1, max_length=200)
+    prompt: str = Field(min_length=1, max_length=100000)
+    cwd: str = Field(min_length=1, max_length=4096)
+    model: str = Field(default='', max_length=150)
+    effort: str = Field(default='', max_length=30)
+    thread_id: Optional[str] = Field(default=None, pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+
+
+class WatchThreadInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    thread_id: str = Field(pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+
+
+class QueueConfigInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    enabled: Optional[bool] = None
+    default_model: Optional[str] = Field(default=None, max_length=150)
+    default_effort: Optional[str] = Field(default=None, max_length=30)
+
+
+class QueueOrder(BaseModel):
+    position: int = Field(ge=1)
+
+
 def filters(start:Optional[date]=None,end:Optional[date]=None,project:str='',codex_project:str='',window:str='',model:str='',search:str=''):
     if start and end and start>end:
         raise HTTPException(422,'开始日期不能晚于结束日期')
@@ -108,6 +137,7 @@ def create_app(store=None, background=True):
                             con.execute('INSERT INTO prices(data) VALUES (?)',(json.dumps(p),))
                 con.execute("INSERT INTO config VALUES ('prices_initialized_v2','1')")
     seed_prices()
+    night_queue = NightQueue(store)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -120,15 +150,21 @@ def create_app(store=None, background=True):
                     store.refresh_quota();last_quota=time.monotonic()
                 stop.wait(5)
         worker = threading.Thread(target=run,daemon=True)
+        queue_worker = threading.Thread(target=night_queue.loop,args=(stop,),daemon=True)
         if background:
             worker.start()
+            queue_worker.start()
         yield
         stop.set()
         if background:
             await asyncio.to_thread(worker.join,10)
+            night_queue.wake.set()
+            await asyncio.to_thread(queue_worker.join,10)
 
     app = FastAPI(title='Codex Token 本地账本',lifespan=lifespan)
+    instance_id = uuid.uuid4().hex
     app.state.store = store
+    app.state.night_queue = night_queue
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=['127.0.0.1','localhost','testserver'])
 
     @app.middleware('http')
@@ -153,6 +189,22 @@ def create_app(store=None, background=True):
     @app.get('/api/status')
     def status():
         return store.status()
+
+    @app.get('/api/service/status')
+    def service_status():
+        return {'managed': os.environ.get('CODEX_ANALYZER_MANAGED') == '1',
+                'instance_id': instance_id}
+
+    @app.post('/api/service/restart', status_code=202)
+    def restart_service():
+        if os.environ.get('CODEX_ANALYZER_MANAGED') != '1':
+            raise HTTPException(409, '当前服务未由系统服务管理，无法从页面安全重启')
+        if not night_queue.prepare_restart():
+            raise HTTPException(409, '任务正在执行，请等待本轮结束后重启服务')
+        timer = threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM))
+        timer.daemon = True
+        timer.start()
+        return {'status': 'restarting', 'instance_id': instance_id}
 
     @app.post('/api/quota/refresh',status_code=202)
     def refresh_quota():
@@ -187,6 +239,109 @@ def create_app(store=None, background=True):
     @app.get('/api/quota')
     def quota():
         return store.quota_status()
+
+    @app.get('/api/night-queue')
+    def get_night_queue():
+        return night_queue.snapshot()
+
+    @app.get('/api/night-queue/recent-projects')
+    def recent_queue_projects():
+        """Offer recently active, existing work directories without persisting new data."""
+        projects = {}
+        for task in store.snapshot()['tasks'].values():
+            path = task.get('project') or ''
+            timestamp = task.get('updated_at') or ''
+            if not path or not timestamp or not Path(path).is_absolute() or not Path(path).is_dir():
+                continue
+            try:
+                activity = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).timestamp()
+            except ValueError:
+                continue
+            if path not in projects or activity > projects[path]['activity']:
+                projects[path] = {'path': path, 'name': Path(path).name or path,
+                                  'codex_project': task.get('codex_project') or '',
+                                  'updated_at': timestamp, 'activity': activity}
+        recent = sorted(projects.values(), key=lambda item: (-item['activity'], item['path']))[:5]
+        for item in recent:
+            item.pop('activity')
+        return {'items': recent}
+
+    @app.get('/api/night-queue/project-threads')
+    def queue_project_threads(project: str = Query(min_length=1, max_length=4096)):
+        tasks = [task for task in store.snapshot()['tasks'].values()
+                 if task.get('project') == project and task.get('is_window_root')
+                 and task.get('id') and task.get('updated_at') and not task.get('archived')]
+        tasks.sort(key=lambda task: task['updated_at'], reverse=True)
+        return {'items': [{'id': task['id'], 'title': task.get('window_name') or task.get('title') or task['id'],
+                           'updated_at': task['updated_at']} for task in tasks[:50]]}
+
+    @app.get('/api/night-queue/models')
+    def queue_models():
+        try:
+            return {'items':night_queue.model_provider()}
+        except Exception as exc:
+            raise HTTPException(503, f'无法读取 Codex 可用模型：{str(exc)[:180]}')
+
+    @app.put('/api/night-queue/config')
+    def queue_config(value:QueueConfigInput):
+        return night_queue.update_config(value.model_dump(exclude_unset=True))
+
+    @app.post('/api/night-queue/items',status_code=201)
+    def add_queue_item(value:QueueItemInput):
+        data=value.model_dump()
+        data['cwd']=str(Path(data['cwd']).expanduser().resolve())
+        if not Path(data['cwd']).is_dir():
+            raise HTTPException(422,'工作目录不存在')
+        if not data['model'] and not night_queue.config()['default_model']:
+            raise HTTPException(422,'请为任务或队列选择模型')
+        try:
+            return {'id':night_queue.add(data)}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+        except Exception as exc:
+            raise HTTPException(503, f'无法核对目标 Codex 对话：{str(exc)[:180]}')
+
+    @app.post('/api/night-queue/watch',status_code=201)
+    def watch_existing_thread(value:WatchThreadInput):
+        try:
+            return {'id': night_queue.watch_thread(value.thread_id)}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+        except Exception as exc:
+            raise HTTPException(503, f'无法读取已有 Codex 对话：{str(exc)[:180]}')
+
+    @app.put('/api/night-queue/items/{item_id}')
+    def edit_queue_item(item_id:int,value:QueueItemInput):
+        data=value.model_dump()
+        data['cwd']=str(Path(data['cwd']).expanduser().resolve())
+        if not Path(data['cwd']).is_dir():
+            raise HTTPException(422,'工作目录不存在')
+        try:
+            night_queue.update_item(item_id,data)
+        except KeyError:
+            raise HTTPException(404,'队列任务不存在')
+        except ValueError as exc:
+            raise HTTPException(409,str(exc))
+        except Exception as exc:
+            raise HTTPException(503, f'无法核对目标 Codex 对话：{str(exc)[:180]}')
+        return {'id':item_id}
+
+    @app.put('/api/night-queue/items/{item_id}/order')
+    def order_queue_item(item_id:int,value:QueueOrder):
+        try:
+            night_queue.move(item_id,value.position)
+        except ValueError as exc:
+            raise HTTPException(409,str(exc))
+        return {'id':item_id}
+
+    @app.delete('/api/night-queue/items/{item_id}',status_code=204)
+    def delete_queue_item(item_id:int):
+        try:
+            night_queue.remove(item_id)
+        except KeyError:
+            raise HTTPException(404,'队列任务不存在')
+        except ValueError as exc:
+            raise HTTPException(409,str(exc))
 
     @app.get('/api/tasks')
     def tasks(f=Depends(filters),sort:str=Query('tokens',pattern='^(tokens|time|cost)$'),direction:str=Query('desc',pattern='^(asc|desc)$'),page:int=Query(1,ge=1),page_size:int=Query(25,ge=1,le=100)):
