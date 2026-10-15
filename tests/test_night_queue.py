@@ -4,6 +4,7 @@ import json
 import queue as thread_queue
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from analyzer.app import create_app
@@ -77,6 +78,130 @@ def test_queue_does_not_send_when_disabled_or_quota_low_and_survives_restart(fix
     assert not runner.calls
 
 
+def test_transient_failure_retries_without_blocking_later_work(fixture_store, tmp_path):
+    store, _ = fixture_store
+    calls = []
+
+    class FlakyRunner:
+        def run(self, item, started):
+            calls.append(item['title'])
+            if item['title'] == 'first' and calls.count('first') == 1:
+                raise TimeoutError('app-server 响应超时')
+            started('thread-' + str(item['id']), 'turn-' + str(item['id']))
+            return 'completed', ''
+
+    queue = NightQueue(store, FlakyRunner(), lambda: [
+        {'id': 'm', 'efforts': ['medium'], 'default_effort': 'medium'}])
+    store.refresh_quota = lambda: quota()
+    first = queue.add({'title': 'first', 'prompt': 'A', 'cwd': str(tmp_path), 'model': 'm', 'effort': 'medium'})
+    queue.add({'title': 'second', 'prompt': 'B', 'cwd': str(tmp_path), 'model': 'm', 'effort': 'medium'})
+    queue.update_config({'enabled': True})
+    queue.tick()
+    queue.active.join(2)
+    assert queue.items()[0]['status'] == 'pending'
+    assert queue.items()[0]['retry_count'] == 1
+    assert queue.items()[0]['resume_after'] > time.time()
+    queue.tick()
+    queue.active.join(2)
+    assert calls == ['first', 'second']
+    with store.connect() as con:
+        con.execute('UPDATE night_queue_items SET resume_after=? WHERE id=?', (time.time() - 1, first))
+    queue.tick()
+    queue.active.join(2)
+    assert calls == ['first', 'second', 'first']
+    assert queue.items()[0]['status'] == 'completed'
+
+
+def test_attention_item_does_not_block_other_pending_items(fixture_store, tmp_path):
+    store, _ = fixture_store
+    calls = []
+
+    class FailingRunner:
+        def run(self, item, started):
+            calls.append(item['title'])
+            if item['title'] == 'first':
+                raise RuntimeError('需要人工核查')
+            started('thread-second', 'turn-second')
+            return 'completed', ''
+
+    queue = NightQueue(store, FailingRunner(), lambda: [
+        {'id': 'm', 'efforts': ['medium'], 'default_effort': 'medium'}])
+    store.refresh_quota = lambda: quota()
+    queue.add({'title': 'first', 'prompt': 'A', 'cwd': str(tmp_path), 'model': 'm', 'effort': 'medium'})
+    queue.add({'title': 'second', 'prompt': 'B', 'cwd': str(tmp_path), 'model': 'm', 'effort': 'medium'})
+    queue.update_config({'enabled': True})
+    queue.tick()
+    queue.active.join(2)
+    assert queue.items()[0]['status'] == 'needs_attention'
+    queue.tick()
+    queue.active.join(2)
+    assert calls == ['first', 'second']
+    assert queue.items()[1]['status'] == 'completed'
+
+
+def test_deferred_followup_preserves_order_within_target_thread(fixture_store, tmp_path):
+    store, _ = fixture_store
+    runner = FakeRunner()
+    thread_id = '11111111-1111-1111-1111-111111111111'
+    queue = NightQueue(store, runner, lambda: [
+        {'id': 'm', 'efforts': ['medium'], 'default_effort': 'medium'}])
+    queue.thread_provider = lambda _: {'id': thread_id, 'cwd': str(tmp_path),
+                                       'turn_id': 'original-turn', 'turn_status': 'completed',
+                                       'archived': False, 'parent_id': None}
+    store.refresh_quota = lambda: quota()
+    first = queue.add({'title': 'first', 'prompt': 'A', 'cwd': str(tmp_path), 'model': 'm',
+                       'effort': 'medium', 'thread_id': thread_id})
+    queue.add({'title': 'second', 'prompt': 'B', 'cwd': str(tmp_path), 'model': 'm',
+               'effort': 'medium', 'thread_id': thread_id})
+    independent = queue.add({'title': 'independent', 'prompt': 'C', 'cwd': str(tmp_path),
+                             'model': 'm', 'effort': 'medium'})
+    with store.connect() as con:
+        con.execute('UPDATE night_queue_items SET resume_after=? WHERE id=?', (time.time() + 300, first))
+    queue.update_config({'enabled': True})
+    queue.tick()
+    queue.active.join(2)
+    assert runner.calls == [(independent, 'm', 'medium')]
+
+
+def test_manual_retry_requires_unchanged_followup_target(fixture_store, tmp_path):
+    store, _ = fixture_store
+    thread_id = '11111111-1111-1111-1111-111111111111'
+    snapshot = {'id': thread_id, 'cwd': str(tmp_path), 'turn_id': 'original-turn',
+                'turn_status': 'completed', 'archived': False, 'parent_id': None}
+    queue = NightQueue(store, FakeRunner(), lambda: [])
+    queue.thread_provider = lambda _: snapshot
+    key = queue.add({'title': 'followup', 'prompt': 'Do work', 'cwd': str(tmp_path),
+                     'model': 'm', 'effort': 'medium', 'thread_id': thread_id})
+    with store.connect() as con:
+        con.execute("UPDATE night_queue_items SET status='needs_attention' WHERE id=?", (key,))
+    queue.thread_provider = lambda _: {**snapshot, 'turn_id': 'new-turn'}
+    with pytest.raises(ValueError, match='避免重复发送'):
+        queue.retry(key)
+    assert queue.items()[0]['status'] == 'needs_attention'
+    queue.thread_provider = lambda _: snapshot
+    queue.retry(key)
+    assert queue.items()[0]['status'] == 'pending'
+
+
+def test_edit_can_convert_locked_followup_to_new_thread(fixture_store, tmp_path):
+    store, _ = fixture_store
+    thread_id = '11111111-1111-1111-1111-111111111111'
+    queue = NightQueue(store, FakeRunner(), lambda: [])
+    queue.thread_provider = lambda _: {'id': thread_id, 'cwd': str(tmp_path),
+                                       'turn_id': 'original-turn', 'turn_status': 'completed',
+                                       'archived': False, 'parent_id': None}
+    item = {'title': 'followup', 'prompt': 'Do work', 'cwd': str(tmp_path),
+            'model': 'm', 'effort': 'medium', 'thread_id': thread_id}
+    key = queue.add(item)
+    with store.connect() as con:
+        con.execute("UPDATE night_queue_items SET retry_count=3,resume_after=?,message='writer busy' WHERE id=?",
+                    (time.time() + 300, key))
+    queue.update_item(key, {**item, 'thread_id': None})
+    updated = queue.items()[0]
+    assert (updated['source'], updated['thread_id'], updated['status']) == ('queue', None, 'pending')
+    assert updated['retry_count'] == 0 and updated['resume_after'] is None and updated['message'] is None
+
+
 def test_queue_api_crud_and_model_catalog(fixture_store, tmp_path):
     store, _ = fixture_store
     app = create_app(store, background=False)
@@ -120,7 +245,7 @@ def test_recent_queue_projects_use_latest_interaction_per_existing_directory(fix
         result = client.get('/api/night-queue/recent-projects')
     assert result.status_code == 200
     items = result.json()['items']
-    assert [item['path'] for item in items] == [str(projects[index]) for index in (0, 6, 5, 4, 3)]
+    assert [item['path'] for item in items] == [str(projects[index]) for index in (0, 6, 5, 4, 3, 2, 1)]
     assert items[0]['name'] == 'project-0'
     assert items[0]['codex_project'] == '工作项目'
 
@@ -190,6 +315,50 @@ def test_followup_runner_sends_prompt_to_selected_thread_and_waits_for_active_tu
     }[request_id])
     assert AppServerRunner().run(item, lambda *_: None)[0] == 'deferred'
     assert not any(request.get('method') == 'turn/start' for request in sent)
+    sent.clear()
+    monkeypatch.setattr(module, '_latest_turn', lambda *_: {'id': 'old-turn', 'status': 'completed'})
+    def busy_reply(_reader, request_id, **_):
+        if request_id == 3:
+            raise module.AppServerError({'message': 'thread selected-thread already has an active writer'})
+        return {4: {'thread': {'status': {'type': 'idle'}}},
+                2: {'thread': {'id': 'selected-thread'}}}[request_id]
+    monkeypatch.setattr(module, '_reply', busy_reply)
+    assert AppServerRunner().run(item, lambda *_: None)[0] == 'deferred'
+    assert sent[-1]['method'] == 'turn/start'
+
+
+def test_blank_queue_thread_retries_original_prompt_after_writer_conflict(monkeypatch, tmp_path):
+    import analyzer.night_queue as module
+    sent = []
+    busy = [True]
+
+    class Process:
+        def terminate(self): pass
+        def wait(self, timeout=None): pass
+
+    class Reader:
+        def __init__(self):
+            self.values = thread_queue.Queue()
+            self.values.put({'method': 'turn/completed', 'params': {
+                'turn': {'id': 'new-turn', 'status': 'completed'}}})
+
+    def reply(_reader, request_id, **_):
+        if request_id == 3 and busy[0]:
+            raise module.AppServerError({'message': 'thread new-thread already has an active writer'})
+        return {4: {'thread': {'status': {'type': 'idle'}}},
+                2: {'thread': {'id': 'new-thread'}},
+                3: {'turn': {'id': 'new-turn'}}}[request_id]
+
+    monkeypatch.setattr(module, '_start_server', lambda: (Process(), Reader()))
+    monkeypatch.setattr(module, '_send', lambda _proc, request: sent.append(request))
+    monkeypatch.setattr(module, '_reply', reply)
+    monkeypatch.setattr(module, '_latest_turn', lambda *_: {})
+    item = {'source': 'queue', 'status': 'pending', 'thread_id': 'new-thread', 'turn_id': None,
+            'cwd': str(tmp_path), 'model': 'm', 'effort': 'medium', 'prompt': 'original prompt'}
+    assert AppServerRunner().run(item, lambda *_: None)[0] == 'deferred'
+    busy[0] = False
+    assert AppServerRunner().run(item, lambda *_: None)[0] == 'completed'
+    assert sent[-1]['params']['input'][0]['text'] == 'original prompt'
 
 
 def test_followups_to_same_thread_rebase_after_previous_completion(fixture_store, tmp_path):

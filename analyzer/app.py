@@ -4,11 +4,12 @@ import io
 import json
 import os
 import signal
+import sqlite3
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional
@@ -24,8 +25,22 @@ from .analytics import Analytics
 from .activity import merge_work_steps, read_turn_activity
 from .store import Store
 from .night_queue import NightQueue
+from .prompt_history import PromptHistory
 
 BASE = Path(__file__).resolve().parent.parent
+
+
+def _queue_timestamp(value):
+    """Normalize Codex metadata timestamps (ISO strings or epoch seconds/milliseconds)."""
+    if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+        try:
+            stamp = float(value)
+            if stamp > 1_000_000_000_000:
+                stamp /= 1000
+            return datetime.fromtimestamp(stamp, timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return ''
+    return str(value or '')
 
 
 class Price(BaseModel):
@@ -91,12 +106,23 @@ class WatchThreadInput(BaseModel):
 class QueueConfigInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     enabled: Optional[bool] = None
+    quota_wake_enabled: Optional[bool] = None
     default_model: Optional[str] = Field(default=None, max_length=150)
     default_effort: Optional[str] = Field(default=None, max_length=30)
+    bridge_dispatcher_thread_id: Optional[str] = Field(
+        default=None,
+        pattern=r'^$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    )
 
 
 class QueueOrder(BaseModel):
     position: int = Field(ge=1)
+
+
+class BridgeResult(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    outcome: str = Field(pattern='^(delivered|not_sent|uncertain)$')
+    turn_id: Optional[str] = Field(default=None, pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 
 
 def filters(start:Optional[date]=None,end:Optional[date]=None,project:str='',codex_project:str='',window:str='',model:str='',search:str=''):
@@ -138,6 +164,7 @@ def create_app(store=None, background=True):
                 con.execute("INSERT INTO config VALUES ('prices_initialized_v2','1')")
     seed_prices()
     night_queue = NightQueue(store)
+    prompt_history = PromptHistory(store)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -145,9 +172,19 @@ def create_app(store=None, background=True):
         def run():
             last_quota=0
             while not stop.is_set():
-                store.sync()
-                if time.monotonic()-last_quota>=300:
-                    store.refresh_quota();last_quota=time.monotonic()
+                if time.monotonic()-last_quota>=60:
+                    try:
+                        store.refresh_quota()
+                        night_queue.wake.set()
+                    except Exception:
+                        # A transient quota read must not kill the only refresh worker.
+                        pass
+                    last_quota=time.monotonic()
+                try:
+                    store.sync()
+                except Exception:
+                    # Sync is independent of the quota and queue workers.
+                    pass
                 stop.wait(5)
         worker = threading.Thread(target=run,daemon=True)
         queue_worker = threading.Thread(target=night_queue.loop,args=(stop,),daemon=True)
@@ -165,6 +202,7 @@ def create_app(store=None, background=True):
     instance_id = uuid.uuid4().hex
     app.state.store = store
     app.state.night_queue = night_queue
+    app.state.prompt_history = prompt_history
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=['127.0.0.1','localhost','testserver'])
 
     @app.middleware('http')
@@ -208,7 +246,12 @@ def create_app(store=None, background=True):
 
     @app.post('/api/quota/refresh',status_code=202)
     def refresh_quota():
-        threading.Thread(target=store.refresh_quota,daemon=True).start()
+        def refresh_and_wake():
+            try:
+                store.refresh_quota()
+            finally:
+                night_queue.wake.set()
+        threading.Thread(target=refresh_and_wake,daemon=True).start()
         return {'accepted':True}
 
     @app.get('/api/issues')
@@ -240,40 +283,96 @@ def create_app(store=None, background=True):
     def quota():
         return store.quota_status()
 
+    @app.get('/api/prompts')
+    def prompts():
+        return prompt_history.snapshot()
+
     @app.get('/api/night-queue')
     def get_night_queue():
         return night_queue.snapshot()
 
+    @app.post('/api/night-queue/bridge/claim')
+    def claim_queue_bridge():
+        try:
+            return {'item': night_queue.bridge_claim()}
+        except Exception as exc:
+            raise HTTPException(503, f'无法认领原对话派发任务：{str(exc)[:180]}')
+
+    @app.post('/api/night-queue/bridge/{item_id}/result')
+    def complete_queue_bridge(item_id: int, value: BridgeResult):
+        try:
+            night_queue.bridge_result(item_id, value.outcome, value.turn_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+        except Exception as exc:
+            raise HTTPException(503, f'无法核对原对话派发结果：{str(exc)[:180]}')
+        return {'id': item_id}
+
     @app.get('/api/night-queue/recent-projects')
     def recent_queue_projects():
-        """Offer recently active, existing work directories without persisting new data."""
+        """Offer every existing work directory known to Codex, newest interaction first."""
         projects = {}
+        # The analyzer task table only contains conversations with imported usage
+        # logs. Read Codex's metadata database as well so projects without usage
+        # events are still selectable.
+        if not store.privacy_mode:
+            try:
+                metadata, _ = store._metadata()
+            except (OSError, sqlite3.Error):
+                metadata = {}
+            for task in metadata.values():
+                path = task.get('cwd') or ''
+                timestamp = _queue_timestamp(task.get('updated_at'))
+                if not path or not Path(path).is_absolute() or not Path(path).is_dir():
+                    continue
+                current = projects.get(path)
+                if current is None or timestamp > current['updated_at']:
+                    projects[path] = {'path': path, 'name': Path(path).name or path,
+                                      'codex_project': task.get('codex_project_name') or '',
+                                      'updated_at': timestamp}
         for task in store.snapshot()['tasks'].values():
             path = task.get('project') or ''
-            timestamp = task.get('updated_at') or ''
+            timestamp = _queue_timestamp(task.get('updated_at'))
             if not path or not timestamp or not Path(path).is_absolute() or not Path(path).is_dir():
                 continue
-            try:
-                activity = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).timestamp()
-            except ValueError:
-                continue
-            if path not in projects or activity > projects[path]['activity']:
+            current = projects.get(path)
+            if current is None or timestamp > current['updated_at']:
                 projects[path] = {'path': path, 'name': Path(path).name or path,
                                   'codex_project': task.get('codex_project') or '',
-                                  'updated_at': timestamp, 'activity': activity}
-        recent = sorted(projects.values(), key=lambda item: (-item['activity'], item['path']))[:5]
-        for item in recent:
-            item.pop('activity')
-        return {'items': recent}
+                                  'updated_at': timestamp}
+        return {'items': sorted(projects.values(),
+                                key=lambda item: (item['updated_at'], item['path']), reverse=True)}
 
     @app.get('/api/night-queue/project-threads')
     def queue_project_threads(project: str = Query(min_length=1, max_length=4096)):
-        tasks = [task for task in store.snapshot()['tasks'].values()
-                 if task.get('project') == project and task.get('is_window_root')
-                 and task.get('id') and task.get('updated_at') and not task.get('archived')]
-        tasks.sort(key=lambda task: task['updated_at'], reverse=True)
-        return {'items': [{'id': task['id'], 'title': task.get('window_name') or task.get('title') or task['id'],
-                           'updated_at': task['updated_at']} for task in tasks[:50]]}
+        target = str(Path(project).expanduser().resolve())
+        tasks = {}
+        if not store.privacy_mode:
+            try:
+                metadata, edges = store._metadata()
+            except (OSError, sqlite3.Error):
+                metadata, edges = {}, {}
+            for thread_id, task in metadata.items():
+                cwd = task.get('cwd') or ''
+                if not cwd or str(Path(cwd).expanduser().resolve()) != target:
+                    continue
+                if (edges.get(thread_id) or task.get('parent_thread_id') or task.get('parent_id') or
+                        task.get('thread_source') in ('subagent', 'guardian_review')):
+                    continue
+                tasks[thread_id] = {'id': thread_id,
+                                    'title': task.get('name') or task.get('title') or thread_id,
+                                    'updated_at': _queue_timestamp(task.get('updated_at')),
+                                    'archived': bool(task.get('archived'))}
+        # Keep legacy/log-only conversations available when Codex metadata is absent.
+        for task in store.snapshot()['tasks'].values():
+            if (task.get('project') == target and task.get('is_window_root') and task.get('id')
+                    and task['id'] not in tasks):
+                tasks[task['id']] = {'id': task['id'],
+                                     'title': task.get('window_name') or task.get('title') or task['id'],
+                                     'updated_at': task.get('updated_at') or '',
+                                     'archived': bool(task.get('archived'))}
+        items = sorted(tasks.values(), key=lambda task: (task['updated_at'], task['id']), reverse=True)
+        return {'items': items}
 
     @app.get('/api/night-queue/models')
     def queue_models():
@@ -332,6 +431,18 @@ def create_app(store=None, background=True):
             night_queue.move(item_id,value.position)
         except ValueError as exc:
             raise HTTPException(409,str(exc))
+        return {'id':item_id}
+
+    @app.post('/api/night-queue/items/{item_id}/retry')
+    def retry_queue_item(item_id:int):
+        try:
+            night_queue.retry(item_id)
+        except KeyError:
+            raise HTTPException(404,'队列任务不存在')
+        except ValueError as exc:
+            raise HTTPException(409,str(exc))
+        except Exception as exc:
+            raise HTTPException(503,f'无法核对目标 Codex 对话：{str(exc)[:180]}')
         return {'id':item_id}
 
     @app.delete('/api/night-queue/items/{item_id}',status_code=204)

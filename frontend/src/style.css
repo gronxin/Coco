@@ -90,3 +90,26 @@ button,input,select,textarea{font:inherit}textarea{min-width:0;max-width:100%;bo
 
 .night-queue{display:grid;gap:20px}.night-queue .panel-heading{align-items:flex-start}.night-queue .panel-heading>div{min-width:0}.night-queue .form-grid{margin-top:18px}.night-form{display:grid;gap:15px}.night-form label{display:grid;gap:7px}.night-form textarea{min-height:135px;resize:vertical}.night-queue input,.night-queue textarea,.night-queue select{width:100%;min-width:0}.queue-list{display:grid;gap:12px;margin-top:16px}.queue-item{display:flex;justify-content:space-between;gap:18px;padding:18px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}.queue-item>div:first-child{min-width:0;flex:1}.queue-item h3{margin:8px 0}.queue-item p,.queue-item pre{overflow-wrap:anywhere;white-space:pre-wrap}.queue-item p,.queue-item small{color:var(--text-muted)}.queue-item details{margin-top:10px}.queue-actions{display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px}.queue-actions button{white-space:nowrap}@media(max-width:760px){.queue-item{display:block}.queue-actions{margin-top:14px}.night-queue .panel-heading{flex-wrap:wrap}}
 .recent-projects{min-width:0;margin:0;padding:14px;border:1px solid var(--line);border-radius:9px}.recent-projects legend{padding:0 6px;color:var(--text);font-weight:650}.recent-projects>p{margin:0 0 12px;font-size:12px}.recent-project-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:9px}.recent-project{display:grid;gap:5px;min-width:0;padding:12px;text-align:left;background:var(--surface-soft);border-color:var(--line)}.recent-project strong{color:var(--text);font-size:13px;overflow-wrap:anywhere}.recent-project span{color:var(--text-muted);font-size:11px;overflow-wrap:anywhere}.recent-project small{color:var(--text-muted);font-size:11px}.recent-project[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.queue-history{display:grid;gap:20px}.queue-history-list{display:grid;gap:9px}.queue-history-item{border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}.queue-history-item>summary{cursor:pointer;padding:16px 18px;font-weight:650;overflow-wrap:anywhere}.queue-history-item[open]>summary{border-bottom:1px solid var(--line)}.queue-history-body{padding:16px 18px;overflow-wrap:anywhere}.queue-history-body .facts{margin-bottom:12px}.queue-history-body p{color:var(--text-muted)}.queue-history-body code{white-space:normal;overflow-wrap:anywhere}.queue-history-body h3{margin:18px 0 8px;font-size:13px}.queue-history-body pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:480px;overflow:auto;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}.queue-history-body button{margin-top:10px}
+
+/* Personal Prompt history stays separate from token and tool-call analytics. */
+.prompt-layout{display:grid;grid-template-columns:minmax(190px,230px) minmax(230px,300px) minmax(0,1fr);gap:16px;align-items:start}
+.prompt-layout>.panel{margin-bottom:0}
+.prompt-projects,.prompt-tasks{position:sticky;top:20px}
+.prompt-tasks label{margin-bottom:14px}
+.prompt-picker{display:grid;gap:8px;max-height:70vh;overflow:auto}
+.prompt-picker button{display:grid;gap:5px;min-width:0;text-align:left;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-soft);color:var(--text)}
+.prompt-picker button.selected{border-color:var(--accent);background:var(--accent-soft)}
+.prompt-picker button strong{font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.prompt-picker button small{font-size:10px;color:var(--text-muted);overflow-wrap:anywhere}
+.prompt-picker button span{font-size:11px;color:var(--text-soft)}
+.prompt-conversation{min-height:420px}
+.prompt-conversation .panel-heading{border-bottom:1px solid var(--line);padding-bottom:14px}
+.prompt-conversation .panel-heading h2{overflow-wrap:anywhere}
+.prompt-entries{display:grid;gap:14px}
+.prompt-entries article{min-width:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.prompt-entry-head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:11px 14px;background:var(--surface-soft);border-bottom:1px solid var(--line);font-size:11px;color:var(--text-muted)}
+.prompt-entries pre{margin:0;padding:15px 16px;background:transparent;color:var(--text);font:13px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;white-space:pre-wrap;overflow-wrap:anywhere}
+.prompt-entries article>.muted{padding:0 16px}
+@media(max-width:1100px){.prompt-layout{grid-template-columns:minmax(180px,220px) minmax(0,1fr)}.prompt-conversation{grid-column:1/-1}.prompt-projects,.prompt-tasks{position:static}}
+@media(max-width:760px){.prompt-layout{display:block}.prompt-layout>.panel{margin-bottom:16px}.prompt-picker{max-height:260px}}
