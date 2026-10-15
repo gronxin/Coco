@@ -67,7 +67,7 @@ macOS 还可安装独立的额度导航按钮：
 .venv/bin/python scripts/macos_overlay.py install
 ```
 
-切换到 Codex 桌面应用后，按钮显示在左侧导航栏底部并跟随当前 Codex 窗口。点击按钮显示或隐藏额度浮窗；任务区域展开时显示待执行总数和前五条任务，点击任务数量可折叠为仅显示总数。浮窗可拖动，保存的是相对 Codex 窗口的位置。可用 `.venv/bin/python scripts/macos_overlay.py status` 查看状态，或用 `uninstall` 移除。
+切换到 Codex 桌面应用后，按钮显示在左侧导航栏底部并跟随当前 Codex 窗口。点击按钮显示或隐藏额度浮窗；未自定义位置时，浮窗默认位于按钮右侧 8 点并与按钮底边对齐。任务区域展开时显示待执行总数和前五条任务，点击右侧向上或向下箭头可折叠或展开；点击其他标题、数量、时间戳和空白区域不会打开 Web 页面。点击额度环打开用量总览，点击具体任务打开任务队列。浮窗可拖动，保存的是相对 Codex 窗口的位置。可用 `.venv/bin/python scripts/macos_overlay.py status` 查看状态，或用 `uninstall` 移除。
 
 可选环境变量：
 

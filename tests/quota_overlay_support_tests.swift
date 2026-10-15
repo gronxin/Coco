@@ -32,6 +32,7 @@ private struct OverlaySupportTests {
         testCoordinateConversion()
         testAnchorsAndClamping()
         testOverlayHitRouting()
+        testDragThreshold()
         testScreenSelection()
         testQueueSummary()
         print("quota overlay support tests passed")
@@ -163,6 +164,28 @@ private struct OverlaySupportTests {
             .quota,
             "quota ring opens the overview"
         )
+        assertEqual(
+            overlayHitTarget(
+                point: CGPoint(x: 192, y: expandedSize.height - 59),
+                panelSize: expandedSize,
+                queueCollapsed: false,
+                visibleTaskCount: 1,
+                dragged: false
+            ),
+            .quota,
+            "second quota ring opens the overview"
+        )
+        assertEqual(
+            overlayHitTarget(
+                point: CGPoint(x: 95, y: expandedSize.height - 59),
+                panelSize: expandedSize,
+                queueCollapsed: false,
+                visibleTaskCount: 1,
+                dragged: false
+            ),
+            .quota,
+            "visible quota ring outer edge remains clickable"
+        )
 
         for (point, size, isCollapsed, message) in [
             (CGPoint(x: expanded.titleRect.midX, y: expanded.titleRect.midY),
@@ -171,6 +194,16 @@ private struct OverlaySupportTests {
              collapsedSize, true, "collapsed count"),
             (CGPoint(x: 100, y: 10), expandedSize, false, "timestamp"),
             (CGPoint(x: 8, y: 80), expandedSize, false, "blank area"),
+            (CGPoint(x: 68, y: expandedSize.height - 10),
+             expandedSize, false, "quota-area top blank"),
+            (CGPoint(x: 68, y: expandedSize.height - 100),
+             expandedSize, false, "quota title"),
+            (CGPoint(x: 68, y: expandedSize.height - 88),
+             expandedSize, false, "quota title upper edge"),
+            (CGPoint(x: 192, y: expandedSize.height - 119),
+             expandedSize, false, "quota reset caption"),
+            (CGPoint(x: 96, y: expandedSize.height - 59),
+             expandedSize, false, "outside quota ring"),
         ] {
             assertEqual(
                 overlayHitTarget(
@@ -234,6 +267,31 @@ private struct OverlaySupportTests {
             ),
             .none,
             "no candidate produces no action"
+        )
+
+        let quotaRings = quotaRingLayouts(panelSize: expandedSize)
+        assertEqual(quotaRings[0].center, CGPoint(x: 68, y: 211),
+                    "first ring uses the drawing center")
+        assertEqual(quotaRings[1].center, CGPoint(x: 192, y: 211),
+                    "second ring uses the drawing center")
+    }
+
+    private static func testDragThreshold() {
+        let start = CGPoint(x: 100, y: 100)
+        assertEqual(
+            exceedsDragThreshold(from: start, to: CGPoint(x: 103, y: 100)),
+            false,
+            "sub-threshold jitter remains a click"
+        )
+        assertEqual(
+            exceedsDragThreshold(from: start, to: CGPoint(x: 104, y: 100)),
+            true,
+            "threshold movement starts a drag"
+        )
+        assertEqual(
+            exceedsDragThreshold(from: start, to: CGPoint(x: 103, y: 103)),
+            true,
+            "diagonal movement uses Euclidean distance"
         )
     }
 

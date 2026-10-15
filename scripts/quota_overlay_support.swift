@@ -22,6 +22,11 @@ struct OverlayQueueLayout {
     let taskRowRects: [CGRect]
 }
 
+struct QuotaRingLayout {
+    let center: CGPoint
+    let radius: CGFloat
+}
+
 /// Returns whether a CoreGraphics window frame is large enough to host the overlay controls.
 func isValidTargetWindow(_ frame: CGRect) -> Bool {
     frame.width >= 120 && frame.height >= 120
@@ -84,13 +89,27 @@ func overlayQueueLayout(panelSize: CGSize, collapsed: Bool) -> OverlayQueueLayou
     )
 }
 
-/// Returns the two quota ring hit regions above the queue divider.
-func quotaHitRects(panelSize: CGSize) -> [CGRect] {
-    let y = max(0, panelSize.height - 127)
+/// Returns shared quota ring geometry for drawing and circular hit testing.
+func quotaRingLayouts(panelSize: CGSize) -> [QuotaRingLayout] {
+    let centerY = panelSize.height - 59
     return [
-        CGRect(x: 14, y: y, width: 108, height: 127),
-        CGRect(x: 138, y: y, width: 108, height: 127),
+        QuotaRingLayout(
+            center: CGPoint(x: 68, y: centerY),
+            radius: 27
+        ),
+        QuotaRingLayout(
+            center: CGPoint(x: 192, y: centerY),
+            radius: 27
+        ),
     ]
+}
+
+/// Returns whether the pointer moved far enough to become a drag.
+func exceedsDragThreshold(from start: CGPoint, to current: CGPoint,
+                          threshold: CGFloat = 4) -> Bool {
+    let deltaX = current.x - start.x
+    let deltaY = current.y - start.y
+    return deltaX * deltaX + deltaY * deltaY >= threshold * threshold
 }
 
 /// Resolves overlapping pointer candidates using the documented interaction priority.
@@ -107,6 +126,11 @@ func resolveOverlayHitTarget(dragged: Bool, arrowHit: Bool,
 func overlayHitTarget(point: CGPoint, panelSize: CGSize, queueCollapsed: Bool,
                       visibleTaskCount: Int, dragged: Bool) -> OverlayHitTarget {
     let layout = overlayQueueLayout(panelSize: panelSize, collapsed: queueCollapsed)
+    let quotaHit = quotaRingLayouts(panelSize: panelSize).contains { ring in
+        let deltaX = point.x - ring.center.x
+        let deltaY = point.y - ring.center.y
+        return deltaX * deltaX + deltaY * deltaY <= ring.radius * ring.radius
+    }
     var taskIndex: Int?
     if !queueCollapsed {
         let visibleCount = min(max(visibleTaskCount, 0), layout.taskRowRects.count)
@@ -119,7 +143,7 @@ func overlayHitTarget(point: CGPoint, panelSize: CGSize, queueCollapsed: Bool,
         dragged: dragged,
         arrowHit: layout.arrowRect.contains(point),
         taskIndex: taskIndex,
-        quotaHit: quotaHitRects(panelSize: panelSize).contains { $0.contains(point) }
+        quotaHit: quotaHit
     )
 }
 
