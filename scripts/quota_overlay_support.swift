@@ -44,6 +44,11 @@ func customOverlayOrigin(window: CGRect, relativeOrigin: CGPoint) -> CGPoint {
     )
 }
 
+/// Adjusts a saved relative origin for a height change while preserving the panel's top edge.
+func resizedRelativeOrigin(_ origin: CGPoint, oldHeight: CGFloat, newHeight: CGFloat) -> CGPoint {
+    CGPoint(x: origin.x, y: origin.y + oldHeight - newHeight)
+}
+
 /// Keeps a panel origin inside the supplied visible screen frame.
 func clampedOrigin(_ origin: CGPoint, size: CGSize, visibleFrame: CGRect) -> CGPoint {
     let maximumX = max(visibleFrame.minX, visibleFrame.maxX - size.width)

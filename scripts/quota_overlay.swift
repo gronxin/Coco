@@ -568,6 +568,7 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         overlayDefaults.set(queueCollapsed, forKey: queueCollapsedKey)
         content.queueCollapsed = queueCollapsed
         let top = panel.frame.maxY
+        let oldHeight = panel.frame.height
         let height = queueCollapsed ? collapsedPanelHeight : expandedPanelHeight
         let nextFrame = NSRect(
             x: panel.frame.minX,
@@ -577,8 +578,10 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         )
         content.setFrameSize(nextFrame.size)
         panel.setFrame(nextFrame, display: true)
-        if customPosition, let target = currentTargetWindow {
-            persistRelativeOrigin(nextFrame.origin, target: target)
+        if customPosition, let relativeOrigin {
+            persistRelativeOffset(
+                resizedRelativeOrigin(relativeOrigin, oldHeight: oldHeight, newHeight: height)
+            )
         }
         refreshPlacementAndVisibility()
     }
@@ -600,6 +603,11 @@ private final class Overlay: NSObject, NSApplicationDelegate {
     /// Saves a panel origin relative to the active Codex target window.
     private func persistRelativeOrigin(_ origin: CGPoint, target: CGRect) {
         let relative = CGPoint(x: origin.x - target.minX, y: origin.y - target.minY)
+        persistRelativeOffset(relative)
+    }
+
+    /// Saves a precomputed target-relative origin without consulting the displayed clamped frame.
+    private func persistRelativeOffset(_ relative: CGPoint) {
         relativeOrigin = relative
         overlayDefaults.set(Double(relative.x), forKey: panelRelativeXKey)
         overlayDefaults.set(Double(relative.y), forKey: panelRelativeYKey)

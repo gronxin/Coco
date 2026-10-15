@@ -25,6 +25,7 @@ private struct OverlaySupportTests {
         testWindowValidation()
         testCoordinateConversion()
         testAnchorsAndClamping()
+        testRelativeOriginResize()
         testScreenSelection()
         testQueueSummary()
         print("quota overlay support tests passed")
@@ -91,6 +92,27 @@ private struct OverlaySupportTests {
             ),
             CGPoint(x: -1440, y: 0),
             "negative display clamping"
+        )
+    }
+
+    private static func testRelativeOriginResize() {
+        assertPoint(
+            resizedRelativeOrigin(
+                CGPoint(x: 1400, y: 500),
+                oldHeight: 194,
+                newHeight: 270
+            ),
+            CGPoint(x: 1400, y: 424),
+            "expanding preserves relative X and the panel top edge"
+        )
+        assertPoint(
+            resizedRelativeOrigin(
+                CGPoint(x: 1400, y: 424),
+                oldHeight: 270,
+                newHeight: 194
+            ),
+            CGPoint(x: 1400, y: 500),
+            "collapsing restores relative Y without using a clamped display origin"
         )
     }
 
