@@ -102,18 +102,32 @@ private final class QuotaView: NSView {
               color: NSColor(calibratedWhite: 0.72, alpha: 1))
     }
 
-    /// Returns the clickable queue header or collapsed-count region.
-    private func queueToggleRect() -> NSRect {
-        if queueCollapsed {
-            return NSRect(x: 0, y: 20, width: bounds.width, height: max(0, bounds.maxY - 147))
-        }
-        return NSRect(x: 0, y: bounds.maxY - 151, width: bounds.width, height: 24)
-    }
+    /// Draws the visible disclosure control for the queue section.
+    private func drawQueueArrow(in rect: NSRect) {
+        NSColor(calibratedWhite: 1, alpha: 0.08).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
+        NSColor(calibratedWhite: 1, alpha: 0.18).setStroke()
+        let border = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5),
+                                  xRadius: 8, yRadius: 8)
+        border.lineWidth = 1
+        border.stroke()
 
-    /// Returns the clickable bounds for one visible queue task.
-    private func taskRect(at index: Int) -> NSRect {
-        NSRect(x: 12, y: bounds.maxY - 171 - CGFloat(index * 18),
-               width: bounds.width - 24, height: 17)
+        let center = NSPoint(x: rect.midX, y: rect.midY)
+        let arrow = NSBezierPath()
+        if queueCollapsed {
+            arrow.move(to: NSPoint(x: center.x - 5, y: center.y + 3))
+            arrow.line(to: NSPoint(x: center.x, y: center.y - 2))
+            arrow.line(to: NSPoint(x: center.x + 5, y: center.y + 3))
+        } else {
+            arrow.move(to: NSPoint(x: center.x - 5, y: center.y - 3))
+            arrow.line(to: NSPoint(x: center.x, y: center.y + 2))
+            arrow.line(to: NSPoint(x: center.x + 5, y: center.y - 3))
+        }
+        arrow.lineWidth = 1.8
+        arrow.lineCapStyle = .round
+        arrow.lineJoinStyle = .round
+        NSColor(calibratedWhite: 0.9, alpha: 1).setStroke()
+        arrow.stroke()
     }
 
     /// Draws the quota rings and the expanded or collapsed queue area.
@@ -147,27 +161,32 @@ private final class QuotaView: NSView {
         let queueColor = queueUnavailable
             ? NSColor.systemOrange
             : NSColor(calibratedWhite: 0.82, alpha: 1)
+        let queueLayout = overlayQueueLayout(panelSize: bounds.size, collapsed: queueCollapsed)
         if queueCollapsed {
-            label("\(queueCount) 个任务", x: 0, y: 34, width: bounds.width,
-                  size: 12, color: queueColor, bold: true)
+            label("\(queueCount) 个任务", x: queueLayout.countRect.minX,
+                  y: queueLayout.countRect.minY, width: queueLayout.countRect.width,
+                  size: 12, color: queueColor, bold: true, alignment: .left)
         } else {
-            label("任务队列 · \(queueCount) 个", x: 17, y: bounds.maxY - 149,
-                  width: bounds.width - 34, size: 10, color: queueColor,
-                  bold: true, alignment: .left)
+            label("任务队列 · \(queueCount) 个", x: queueLayout.titleRect.minX,
+                  y: queueLayout.titleRect.minY, width: queueLayout.titleRect.width,
+                  size: 10, color: queueColor, bold: true, alignment: .left)
             if queueTitles.isEmpty {
                 label(queueUnavailable ? "队列暂不可用" : "暂无待执行任务",
-                      x: 17, y: bounds.maxY - 174, width: bounds.width - 34,
+                      x: queueLayout.taskRowRects[0].minX,
+                      y: queueLayout.taskRowRects[0].minY,
+                      width: queueLayout.taskRowRects[0].width,
                       size: 10, color: NSColor(calibratedWhite: 0.58, alpha: 1),
                       alignment: .left)
             } else {
                 for (index, title) in queueTitles.prefix(5).enumerated() {
-                    label("\(index + 1). \(title)", x: 17,
-                          y: bounds.maxY - 169 - CGFloat(index * 18),
-                          width: bounds.width - 34, size: 11, color: .white,
+                    let row = queueLayout.taskRowRects[index]
+                    label("\(index + 1). \(title)", x: row.minX, y: row.minY,
+                          width: row.width, size: 11, color: .white,
                           alignment: .left)
                 }
             }
         }
+        drawQueueArrow(in: queueLayout.arrowRect)
 
         let timestamp = updated.map {
             let formatter = DateFormatter()
@@ -201,7 +220,7 @@ private final class QuotaView: NSView {
         )
     }
 
-    /// Completes a drag or routes a click to queue toggle, task, or overview actions.
+    /// Completes a drag or routes a click through the explicit overlay hit targets.
     override func mouseUp(with event: NSEvent) {
         if dragged {
             if let window {
@@ -210,17 +229,22 @@ private final class QuotaView: NSView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
-        if queueToggleRect().contains(point) {
+        switch overlayHitTarget(
+            point: point,
+            panelSize: bounds.size,
+            queueCollapsed: queueCollapsed,
+            visibleTaskCount: min(queueTitles.count, 5),
+            dragged: false
+        ) {
+        case .queueToggle:
             onToggleQueue?()
-            return
+        case .task:
+            NSWorkspace.shared.open(queuePageURL)
+        case .quota:
+            NSWorkspace.shared.open(overviewURL)
+        case .none:
+            break
         }
-        if !queueCollapsed {
-            for index in 0..<min(queueTitles.count, 5) where taskRect(at: index).contains(point) {
-                NSWorkspace.shared.open(queuePageURL)
-                return
-            }
-        }
-        NSWorkspace.shared.open(overviewURL)
     }
 
     /// Allows the non-activating panel to receive the first click.
@@ -527,7 +551,7 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         navigationPanel.setFrameOrigin(origin)
     }
 
-    /// Places the overlay at its default anchor or persisted target-relative origin.
+    /// Places the overlay beside the navigation button or at its persisted custom origin.
     private func positionOverlay(for target: CGRect, on screen: NSScreen) {
         let size = panel.frame.size
         if size.width > screen.visibleFrame.width || size.height > screen.visibleFrame.height {
@@ -537,7 +561,7 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         if customPosition, let relativeOrigin {
             requested = customOverlayOrigin(window: target, relativeOrigin: relativeOrigin)
         } else {
-            requested = defaultOverlayOrigin(window: target, panelSize: size)
+            requested = defaultOverlayOrigin(navigationFrame: navigationPanel.frame)
         }
         let origin = clampedOrigin(requested, size: size, visibleFrame: screen.visibleFrame)
         panel.setFrameOrigin(origin)
@@ -562,27 +586,20 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         navigationPanel?.setAccessibilityTitle(title)
     }
 
-    /// Toggles the queue section while preserving the panel's top edge and custom origin.
+    /// Toggles the queue section while preserving the panel's lower-left origin.
     private func toggleQueueCollapsed() {
         queueCollapsed.toggle()
         overlayDefaults.set(queueCollapsed, forKey: queueCollapsedKey)
         content.queueCollapsed = queueCollapsed
-        let top = panel.frame.maxY
-        let oldHeight = panel.frame.height
         let height = queueCollapsed ? collapsedPanelHeight : expandedPanelHeight
         let nextFrame = NSRect(
             x: panel.frame.minX,
-            y: top - height,
+            y: panel.frame.minY,
             width: panelWidth,
             height: height
         )
         content.setFrameSize(nextFrame.size)
         panel.setFrame(nextFrame, display: true)
-        if customPosition, let relativeOrigin {
-            persistRelativeOffset(
-                resizedRelativeOrigin(relativeOrigin, oldHeight: oldHeight, newHeight: height)
-            )
-        }
         refreshPlacementAndVisibility()
     }
 
@@ -740,7 +757,7 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         let queueState = content.queueUnavailable
             ? "任务队列暂不可用，显示上次结果 \(content.queueCount) 个"
             : "任务队列 \(content.queueCount) 个"
-        content.toolTip = "\(quotaTooltip)\n\(queueState)\n点击任务数量折叠或展开"
+        content.toolTip = "\(quotaTooltip)\n\(queueState)\n点击任务区箭头折叠或展开"
     }
 }
 
