@@ -541,9 +541,6 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         }
         let origin = clampedOrigin(requested, size: size, visibleFrame: screen.visibleFrame)
         panel.setFrameOrigin(origin)
-        if customPosition, origin != requested {
-            persistRelativeOrigin(origin, target: target)
-        }
     }
 
     /// Toggles and persists whether the user wants the overlay visible.
