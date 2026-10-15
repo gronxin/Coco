@@ -94,9 +94,11 @@ class _JsonLineReader:
 def _bundled_codex_paths():
     if sys.platform != 'darwin':
         return ()
-    relative = Path('Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex')
+    relatives = (Path('Contents/Resources/codex'),
+                 Path('Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'))
     apps = ('ChatGPT.app', 'Codex.app')
-    return tuple(root / app / relative for root in (Path('/Applications'), Path.home() / 'Applications') for app in apps)
+    return tuple(root / app / relative for root in (Path('/Applications'), Path.home() / 'Applications')
+                 for app in apps for relative in relatives)
 
 
 def _codex_command(system=None, executable=None):
@@ -118,7 +120,7 @@ def _read(reader, request_id, timeout):
     return reader.read(request_id, timeout)
 
 
-def read_quota(timeout=4):
+def read_quota(timeout=40):
     proc=None
     try:
         proc=subprocess.Popen(_codex_command(),stdin=subprocess.PIPE,stdout=subprocess.PIPE,

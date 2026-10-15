@@ -220,7 +220,7 @@ class Store:
             try:
                 con.execute('PRAGMA query_only=ON')
                 cols = {r[1] for r in con.execute('PRAGMA table_info(threads)')}
-                names = [n for n in ('id', 'title', 'name', 'cwd', 'updated_at', 'archived', 'project_id', 'thread_source', 'originator', 'agent_nickname', 'agent_role', 'agent_path') if n in cols]
+                names = [n for n in ('id', 'title', 'name', 'cwd', 'updated_at', 'archived', 'project_id', 'thread_source', 'originator', 'agent_nickname', 'agent_role', 'agent_path', 'parent_thread_id', 'parent_id') if n in cols]
                 project_cols = {r[1] for r in con.execute('PRAGMA table_info(projects)')}
                 projects = {}
                 if {'id','name'} <= project_cols:
