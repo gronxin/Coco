@@ -17,11 +17,13 @@ BINARY = RUNTIME / 'codex-quota-overlay'
 
 
 def loaded():
+    """Return whether launchd currently has the overlay agent loaded."""
     return subprocess.run(['launchctl', 'print', TARGET], stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL, check=False).returncode == 0
 
 
 def build():
+    """Compile the native overlay and copy the binary into its runtime directory."""
     if sys.platform != 'darwin':
         raise RuntimeError('额度悬浮窗仅支持 macOS')
     compiler = shutil.which('swiftc')
@@ -30,6 +32,7 @@ def build():
     ROOT.joinpath('.build').mkdir(exist_ok=True)
     subprocess.run([compiler, '-module-cache-path', '/private/tmp/codex-quota-swift-cache',
                     '-o', str(ROOT / '.build' / 'codex-quota-overlay'),
+                    str(ROOT / 'scripts' / 'quota_overlay_support.swift'),
                     str(ROOT / 'scripts' / 'quota_overlay.swift')], check=True)
     RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
     staged = RUNTIME / '.codex-quota-overlay.staged'
@@ -40,6 +43,7 @@ def build():
 
 
 def install():
+    """Build and register the per-user navigation overlay LaunchAgent."""
     build()
     PLIST.parent.mkdir(parents=True, exist_ok=True)
     settings = {
@@ -66,10 +70,11 @@ def install():
             if attempt == 2:
                 raise
             time.sleep(attempt + 1)
-    print('额度悬浮窗已启动。切换到 Codex 时会显示；点击额度打开用量总览，点击任务打开队列。')
+    print('额度导航按钮已启动。切换到 Codex 后点击左侧按钮显示浮窗；点击任务数量可折叠。')
 
 
 def uninstall():
+    """Unload the overlay LaunchAgent and remove its plist."""
     if loaded():
         subprocess.run(['launchctl', 'bootout', TARGET], check=True)
     PLIST.unlink(missing_ok=True)
