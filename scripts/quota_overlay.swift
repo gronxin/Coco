@@ -36,6 +36,8 @@ private final class QuotaView: NSView {
     var onDragEnded: ((NSPoint) -> Void)?
     var onToggleQueue: (() -> Void)?
     private var dragged = false
+    private var pointerDownScreenLocation: NSPoint?
+    private var dragWindowOrigin: NSPoint?
 
     override var isOpaque: Bool { false }
 
@@ -68,11 +70,11 @@ private final class QuotaView: NSView {
         return "\(weekly ? "下周" : "下次")重置 \(formatter.string(from: date))"
     }
 
-    /// Draws one quota ring relative to the panel's top edge.
-    private func ring(_ quota: QuotaWindow, centerX: CGFloat, title: String,
+    /// Draws one quota ring from the shared rendering and hit-test layout.
+    private func ring(_ quota: QuotaWindow, layout: QuotaRingLayout, title: String,
                       weekly: Bool, color: NSColor) {
-        let center = NSPoint(x: centerX, y: bounds.maxY - 59)
-        let radius: CGFloat = 27
+        let center = NSPoint(x: layout.center.x, y: layout.center.y)
+        let radius = layout.radius
         let background = NSBezierPath()
         background.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
         background.lineWidth = 5
@@ -93,12 +95,12 @@ private final class QuotaView: NSView {
             arc.stroke()
         }
         let value = quota.remaining.map { "\(Int($0.rounded()))%" } ?? "—"
-        label(value, x: centerX - 44, y: bounds.maxY - 69, width: 88,
+        label(value, x: center.x - 44, y: center.y - 10, width: 88,
               size: 17, color: .white, bold: true)
-        label(title, x: centerX - 50, y: bounds.maxY - 100, width: 100,
+        label(title, x: center.x - 50, y: center.y - 46, width: 100,
               size: 11, color: NSColor(calibratedWhite: 0.83, alpha: 1))
-        label(resetLabel(quota.reset, weekly: weekly), x: centerX - 62,
-              y: bounds.maxY - 119, width: 124, size: 9,
+        label(resetLabel(quota.reset, weekly: weekly), x: center.x - 62,
+              y: center.y - 65, width: 124, size: 9,
               color: NSColor(calibratedWhite: 0.72, alpha: 1))
     }
 
@@ -147,8 +149,11 @@ private final class QuotaView: NSView {
         border.lineWidth = 1
         border.stroke()
 
-        ring(fiveHours, centerX: 68, title: "5 小时", weekly: false, color: .systemCyan)
-        ring(week, centerX: 192, title: "本周", weekly: true, color: .systemGreen)
+        let quotaRings = quotaRingLayouts(panelSize: bounds.size)
+        ring(fiveHours, layout: quotaRings[0], title: "5 小时",
+             weekly: false, color: .systemCyan)
+        ring(week, layout: quotaRings[1], title: "本周",
+             weekly: true, color: .systemGreen)
 
         let dividerY = bounds.maxY - 127
         let divider = NSBezierPath()
@@ -200,28 +205,40 @@ private final class QuotaView: NSView {
 
     override var mouseDownCanMoveWindow: Bool { false }
 
-    /// Resets drag detection when a new pointer interaction starts.
+    /// Captures the pointer and panel origins for thresholded drag detection.
     override func mouseDown(with event: NSEvent) {
         dragged = false
+        pointerDownScreenLocation = NSEvent.mouseLocation
+        dragWindowOrigin = window?.frame.origin
     }
 
-    /// Moves the panel directly while pausing automatic overlay placement.
+    /// Moves the panel after the pointer exceeds the drag threshold.
     override func mouseDragged(with event: NSEvent) {
-        guard let window else { return }
+        guard let window,
+              let pointerDownScreenLocation,
+              let dragWindowOrigin else { return }
+        let currentLocation = NSEvent.mouseLocation
         if !dragged {
+            guard exceedsDragThreshold(from: pointerDownScreenLocation, to: currentLocation) else {
+                return
+            }
             dragged = true
             onDragStarted?()
         }
         window.setFrameOrigin(
             NSPoint(
-                x: window.frame.origin.x + event.deltaX,
-                y: window.frame.origin.y - event.deltaY
+                x: dragWindowOrigin.x + currentLocation.x - pointerDownScreenLocation.x,
+                y: dragWindowOrigin.y + currentLocation.y - pointerDownScreenLocation.y
             )
         )
     }
 
     /// Completes a drag or routes a click through the explicit overlay hit targets.
     override func mouseUp(with event: NSEvent) {
+        defer {
+            pointerDownScreenLocation = nil
+            dragWindowOrigin = nil
+        }
         if dragged {
             if let window {
                 onDragEnded?(window.frame.origin)
@@ -630,7 +647,7 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         overlayDefaults.set(Double(relative.y), forKey: panelRelativeYKey)
     }
 
-    /// Returns placement to the default upper-right anchor without deleting legacy keys.
+    /// Returns placement to the default navigation-button anchor without deleting legacy keys.
     private func resetCustomPosition() {
         customPosition = false
         relativeOrigin = nil

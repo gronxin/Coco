@@ -70,7 +70,7 @@ def install():
             if attempt == 2:
                 raise
             time.sleep(attempt + 1)
-    print('额度导航按钮已启动。切换到 Codex 后点击左侧按钮显示浮窗；点击任务数量可折叠。')
+    print('额度导航按钮已启动。切换到 Codex 后点击左侧按钮显示浮窗；点击任务区箭头可折叠或展开。')
 
 
 def uninstall():
