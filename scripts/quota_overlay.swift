@@ -278,6 +278,12 @@ private final class NavigationButtonView: NSView {
         onToggle?()
     }
 
+    /// Routes accessibility press actions through the same toggle callback as mouse clicks.
+    override func accessibilityPerformPress() -> Bool {
+        onToggle?()
+        return true
+    }
+
     /// Allows the non-activating panel to receive the first click.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true

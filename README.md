@@ -61,6 +61,14 @@ macOS 上如需服务独立于终端和 Codex 应用持续运行，先停止前�
 
 该命令安装当前用户的 LaunchAgent，登录后自动启动服务，异常退出时自动恢复。为适配 macOS 后台进程对“文稿”目录的访问限制，运行文件及独立数据库放在 `~/Library/Application Support/CodexTokenAnalyzer`。修改源码并构建前端后，执行 `.venv/bin/python scripts/macos_service.py sync` 更新运行文件，再在“任务队列”页面点击“重启本机服务”使更新生效；有任务正在运行时会拒绝重启。可用 `.venv/bin/python scripts/macos_service.py status` 查看状态，或用 `uninstall` 移除服务。任务队列的开启/关闭仍由页面开关控制，与服务是否常驻分开。
 
+macOS 还可安装独立的额度导航按钮：
+
+```bash
+.venv/bin/python scripts/macos_overlay.py install
+```
+
+切换到 Codex 桌面应用后，按钮显示在左侧导航栏底部并跟随当前 Codex 窗口。点击按钮显示或隐藏额度浮窗；任务区域展开时显示待执行总数和前五条任务，点击任务数量可折叠为仅显示总数。浮窗可拖动，保存的是相对 Codex 窗口的位置。可用 `.venv/bin/python scripts/macos_overlay.py status` 查看状态，或用 `uninstall` 移除。
+
 可选环境变量：
 
 | 变量 | 用途 |
