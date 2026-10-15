@@ -8,6 +8,20 @@ private let hiddenQueueStatuses: Set<String> = [
     "watching",
 ]
 
+enum OverlayHitTarget: Equatable {
+    case queueToggle
+    case task(Int)
+    case quota
+    case none
+}
+
+struct OverlayQueueLayout {
+    let arrowRect: CGRect
+    let titleRect: CGRect
+    let countRect: CGRect
+    let taskRowRects: [CGRect]
+}
+
 /// Returns whether a CoreGraphics window frame is large enough to host the overlay controls.
 func isValidTargetWindow(_ frame: CGRect) -> Bool {
     frame.width >= 120 && frame.height >= 120
@@ -23,12 +37,9 @@ func appKitWindowFrame(cgFrame: CGRect, referenceMaxY: CGFloat) -> CGRect {
     )
 }
 
-/// Calculates the default overlay origin inside the target window's upper-right corner.
-func defaultOverlayOrigin(window: CGRect, panelSize: CGSize) -> CGPoint {
-    CGPoint(
-        x: window.maxX - panelSize.width - 16,
-        y: window.maxY - panelSize.height - 42
-    )
+/// Calculates the default overlay origin beside the visible navigation button.
+func defaultOverlayOrigin(navigationFrame: CGRect) -> CGPoint {
+    CGPoint(x: navigationFrame.maxX + 8, y: navigationFrame.minY)
 }
 
 /// Calculates the navigation button origin above the account area in the Codex rail.
@@ -44,9 +55,72 @@ func customOverlayOrigin(window: CGRect, relativeOrigin: CGPoint) -> CGPoint {
     )
 }
 
-/// Adjusts a saved relative origin for a height change while preserving the panel's top edge.
-func resizedRelativeOrigin(_ origin: CGPoint, oldHeight: CGFloat, newHeight: CGFloat) -> CGPoint {
-    CGPoint(x: origin.x, y: origin.y + oldHeight - newHeight)
+/// Returns shared queue geometry for drawing and pointer hit testing.
+func overlayQueueLayout(panelSize: CGSize, collapsed: Bool) -> OverlayQueueLayout {
+    let arrowX = max(0, panelSize.width - 48)
+    let arrowY = collapsed ? CGFloat(20) : max(0, panelSize.height - 167)
+    let arrowRect = CGRect(x: arrowX, y: arrowY, width: 36, height: 36)
+    let textWidth = max(0, arrowRect.minX - 25)
+    let titleRect = CGRect(
+        x: 17,
+        y: max(0, panelSize.height - 151),
+        width: textWidth,
+        height: 18
+    )
+    let countRect = CGRect(x: 17, y: 32, width: textWidth, height: 18)
+    let taskRows = (0..<5).map { index in
+        CGRect(
+            x: 17,
+            y: panelSize.height - 171 - CGFloat(index * 18),
+            width: textWidth,
+            height: 17
+        )
+    }
+    return OverlayQueueLayout(
+        arrowRect: arrowRect,
+        titleRect: titleRect,
+        countRect: countRect,
+        taskRowRects: taskRows
+    )
+}
+
+/// Returns the two quota ring hit regions above the queue divider.
+func quotaHitRects(panelSize: CGSize) -> [CGRect] {
+    let y = max(0, panelSize.height - 127)
+    return [
+        CGRect(x: 14, y: y, width: 108, height: 127),
+        CGRect(x: 138, y: y, width: 108, height: 127),
+    ]
+}
+
+/// Resolves overlapping pointer candidates using the documented interaction priority.
+func resolveOverlayHitTarget(dragged: Bool, arrowHit: Bool,
+                             taskIndex: Int?, quotaHit: Bool) -> OverlayHitTarget {
+    if dragged { return .none }
+    if arrowHit { return .queueToggle }
+    if let taskIndex { return .task(taskIndex) }
+    if quotaHit { return .quota }
+    return .none
+}
+
+/// Resolves a panel point into its single allowed interaction target.
+func overlayHitTarget(point: CGPoint, panelSize: CGSize, queueCollapsed: Bool,
+                      visibleTaskCount: Int, dragged: Bool) -> OverlayHitTarget {
+    let layout = overlayQueueLayout(panelSize: panelSize, collapsed: queueCollapsed)
+    var taskIndex: Int?
+    if !queueCollapsed {
+        let visibleCount = min(max(visibleTaskCount, 0), layout.taskRowRects.count)
+        for index in 0..<visibleCount where layout.taskRowRects[index].contains(point) {
+            taskIndex = index
+            break
+        }
+    }
+    return resolveOverlayHitTarget(
+        dragged: dragged,
+        arrowHit: layout.arrowRect.contains(point),
+        taskIndex: taskIndex,
+        quotaHit: quotaHitRects(panelSize: panelSize).contains { $0.contains(point) }
+    )
 }
 
 /// Keeps a panel origin inside the supplied visible screen frame.

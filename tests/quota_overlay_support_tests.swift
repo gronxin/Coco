@@ -15,6 +15,12 @@ private func assertPoint(_ actual: CGPoint, _ expected: CGPoint, _ message: Stri
     }
 }
 
+private func assertDisjoint(_ first: CGRect, _ second: CGRect, _ message: String) {
+    guard !first.intersects(second) else {
+        fatalError("\(message): \(first) intersects \(second)")
+    }
+}
+
 private func item(_ title: String, status: String = "queued", position: Int) -> [String: Any] {
     ["title": title, "status": status, "position": position]
 }
@@ -25,7 +31,7 @@ private struct OverlaySupportTests {
         testWindowValidation()
         testCoordinateConversion()
         testAnchorsAndClamping()
-        testRelativeOriginResize()
+        testOverlayHitRouting()
         testScreenSelection()
         testQueueSummary()
         print("quota overlay support tests passed")
@@ -69,10 +75,11 @@ private struct OverlaySupportTests {
 
     private static func testAnchorsAndClamping() {
         let window = CGRect(x: 100, y: 100, width: 1000, height: 700)
+        let navigation = CGRect(x: 106, y: 154, width: 36, height: 36)
         assertPoint(
-            defaultOverlayOrigin(window: window, panelSize: CGSize(width: 260, height: 194)),
-            CGPoint(x: 824, y: 564),
-            "default overlay origin"
+            defaultOverlayOrigin(navigationFrame: navigation),
+            CGPoint(x: 150, y: 154),
+            "default overlay sits beside the navigation button"
         )
         assertPoint(
             navigationOrigin(window: window, buttonSize: CGSize(width: 36, height: 36)),
@@ -95,24 +102,138 @@ private struct OverlaySupportTests {
         )
     }
 
-    private static func testRelativeOriginResize() {
-        assertPoint(
-            resizedRelativeOrigin(
-                CGPoint(x: 1400, y: 500),
-                oldHeight: 194,
-                newHeight: 270
+    private static func testOverlayHitRouting() {
+        let expandedSize = CGSize(width: 260, height: 270)
+        let collapsedSize = CGSize(width: 260, height: 194)
+        let expanded = overlayQueueLayout(panelSize: expandedSize, collapsed: false)
+        let collapsed = overlayQueueLayout(panelSize: collapsedSize, collapsed: true)
+
+        assertEqual(expanded.arrowRect.size, CGSize(width: 36, height: 36),
+                    "expanded arrow hit target")
+        assertEqual(collapsed.arrowRect.size, CGSize(width: 36, height: 36),
+                    "collapsed arrow hit target")
+        for row in expanded.taskRowRects {
+            assertDisjoint(expanded.arrowRect, row, "arrow and task row")
+        }
+        assertDisjoint(expanded.arrowRect, expanded.titleRect, "arrow and task-section title")
+        assertDisjoint(collapsed.arrowRect, collapsed.countRect, "arrow and collapsed count")
+
+        assertEqual(
+            overlayHitTarget(
+                point: CGPoint(x: expanded.arrowRect.midX, y: expanded.arrowRect.midY),
+                panelSize: expandedSize,
+                queueCollapsed: false,
+                visibleTaskCount: 5,
+                dragged: false
             ),
-            CGPoint(x: 1400, y: 424),
-            "expanding preserves relative X and the panel top edge"
+            .queueToggle,
+            "expanded arrow toggles"
         )
-        assertPoint(
-            resizedRelativeOrigin(
-                CGPoint(x: 1400, y: 424),
-                oldHeight: 270,
-                newHeight: 194
+        assertEqual(
+            overlayHitTarget(
+                point: CGPoint(x: collapsed.arrowRect.midX, y: collapsed.arrowRect.midY),
+                panelSize: collapsedSize,
+                queueCollapsed: true,
+                visibleTaskCount: 0,
+                dragged: false
             ),
-            CGPoint(x: 1400, y: 500),
-            "collapsing restores relative Y without using a clamped display origin"
+            .queueToggle,
+            "collapsed arrow toggles"
+        )
+        assertEqual(
+            overlayHitTarget(
+                point: CGPoint(x: expanded.taskRowRects[0].midX,
+                               y: expanded.taskRowRects[0].midY),
+                panelSize: expandedSize,
+                queueCollapsed: false,
+                visibleTaskCount: 1,
+                dragged: false
+            ),
+            .task(0),
+            "visible task row opens the queue"
+        )
+        assertEqual(
+            overlayHitTarget(
+                point: CGPoint(x: 68, y: expandedSize.height - 59),
+                panelSize: expandedSize,
+                queueCollapsed: false,
+                visibleTaskCount: 1,
+                dragged: false
+            ),
+            .quota,
+            "quota ring opens the overview"
+        )
+
+        for (point, size, isCollapsed, message) in [
+            (CGPoint(x: expanded.titleRect.midX, y: expanded.titleRect.midY),
+             expandedSize, false, "task-section title"),
+            (CGPoint(x: collapsed.countRect.midX, y: collapsed.countRect.midY),
+             collapsedSize, true, "collapsed count"),
+            (CGPoint(x: 100, y: 10), expandedSize, false, "timestamp"),
+            (CGPoint(x: 8, y: 80), expandedSize, false, "blank area"),
+        ] {
+            assertEqual(
+                overlayHitTarget(
+                    point: point,
+                    panelSize: size,
+                    queueCollapsed: isCollapsed,
+                    visibleTaskCount: 1,
+                    dragged: false
+                ),
+                .none,
+                "\(message) is a no-op"
+            )
+        }
+
+        assertEqual(
+            resolveOverlayHitTarget(
+                dragged: true,
+                arrowHit: true,
+                taskIndex: 0,
+                quotaHit: true
+            ),
+            .none,
+            "completed drag suppresses every click action"
+        )
+        assertEqual(
+            resolveOverlayHitTarget(
+                dragged: false,
+                arrowHit: true,
+                taskIndex: 0,
+                quotaHit: true
+            ),
+            .queueToggle,
+            "arrow wins over lower-priority candidates"
+        )
+        assertEqual(
+            resolveOverlayHitTarget(
+                dragged: false,
+                arrowHit: false,
+                taskIndex: 0,
+                quotaHit: true
+            ),
+            .task(0),
+            "task wins over quota"
+        )
+        assertEqual(
+            resolveOverlayHitTarget(
+                dragged: false,
+                arrowHit: false,
+                taskIndex: nil,
+                quotaHit: true
+            ),
+            .quota,
+            "quota wins over none"
+        )
+        assertEqual(
+            resolveOverlayHitTarget(
+                dragged: false,
+                arrowHit: false,
+                taskIndex: nil,
+                quotaHit: false
+            ),
+            .none,
+            "no candidate produces no action"
         )
     }
 
