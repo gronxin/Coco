@@ -1,6 +1,6 @@
 import json
 
-from analyzer.prompt_history import PromptHistory, _user_text
+from analyzer.prompt_history import PromptHistory, QUEUE_ATTACHMENT_MARKER, _user_text
 
 
 def test_generated_context_is_removed_before_user_request():
@@ -19,6 +19,12 @@ def test_unrecognized_control_content_is_not_displayed():
     assert _user_text('<future-app-context>automatic</future-app-context>') == ('', 0)
     assert _user_text('<future-app-context source="auto">automatic') == ('', 0)
     assert _user_text('普通用户需求') == ('普通用户需求', 0)
+
+
+def test_queue_attachment_paths_are_removed_from_visible_prompt():
+    """Keep generated attachment paths out of user-visible prompt history."""
+    value = '分析这些文件' + QUEUE_ATTACHMENT_MARKER + '\n- 图表.png：/tmp/queue_attachments/id/图表.png'
+    assert _user_text(value) == ('分析这些文件', 0)
 
 
 def test_prompt_reader_requires_explicit_user_origin(tmp_path):

@@ -3,6 +3,8 @@ import csv
 import io
 import json
 import os
+import re
+import shutil
 import signal
 import sqlite3
 import threading
@@ -25,7 +27,7 @@ from .analytics import Analytics
 from .activity import merge_work_steps, read_turn_activity
 from .store import Store
 from .night_queue import NightQueue
-from .prompt_history import PromptHistory
+from .prompt_history import PromptHistory, QUEUE_ATTACHMENT_MARKER
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -96,6 +98,14 @@ class QueueItemInput(BaseModel):
     model: str = Field(default='', max_length=150)
     effort: str = Field(default='', max_length=30)
     thread_id: Optional[str] = Field(default=None, pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+    attachment_ids: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator('attachment_ids')
+    @classmethod
+    def valid_attachment_ids(cls, values):
+        if len(values) != len(set(values)) or any(not re.fullmatch(r'[0-9a-f]{32}', value) for value in values):
+            raise ValueError('附件 ID 无效或重复')
+        return values
 
 
 class WatchThreadInput(BaseModel):
@@ -343,6 +353,14 @@ def create_app(store=None, background=True):
         return {'items': sorted(projects.values(),
                                 key=lambda item: (item['updated_at'], item['path']), reverse=True)}
 
+    @app.get('/api/night-queue/sidebar-projects')
+    def queue_sidebar_projects():
+        """Match the saved local projects in Codex's left navigation."""
+        try:
+            return {'items': store.sidebar_projects()}
+        except (OSError, sqlite3.Error) as exc:
+            raise HTTPException(503, f'无法读取 Codex 项目列表：{str(exc)[:180]}')
+
     @app.get('/api/night-queue/project-threads')
     def queue_project_threads(project: str = Query(min_length=1, max_length=4096)):
         target = str(Path(project).expanduser().resolve())
@@ -385,9 +403,57 @@ def create_app(store=None, background=True):
     def queue_config(value:QueueConfigInput):
         return night_queue.update_config(value.model_dump(exclude_unset=True))
 
+    attachment_root = store.path.parent / 'queue_attachments'
+
+    @app.get('/api/night-queue/attachments/capabilities')
+    def queue_attachment_capabilities():
+        return {'max_files': 10, 'max_file_bytes': 25 * 1024 * 1024}
+
+    @app.post('/api/night-queue/attachments', status_code=201)
+    async def upload_queue_attachment(request:Request, name:str=Query(max_length=200)):
+        filename = re.sub(r'[\\/\x00-\x1f\x7f]', '_', name).strip(' .')[:180]
+        if not filename:
+            raise HTTPException(422, '文件名不能为空')
+        attachment_id = uuid.uuid4().hex
+        directory = attachment_root / attachment_id
+        directory.mkdir(parents=True, mode=0o700)
+        path = directory / filename
+        size = 0
+        try:
+            with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as output:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 25 * 1024 * 1024:
+                        raise HTTPException(413, '单个附件不能超过 25 MB')
+                    output.write(chunk)
+            if not size:
+                raise HTTPException(422, '不能上传空文件')
+        except BaseException:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+        return {'id': attachment_id, 'name': filename, 'size': size}
+
+    def attach_queue_files(data):
+        attachments = []
+        for attachment_id in data.pop('attachment_ids', []):
+            directory = attachment_root / attachment_id
+            if not directory.is_dir() or directory.is_symlink():
+                raise HTTPException(422, f'附件不存在：{attachment_id}')
+            files = list(directory.iterdir())
+            if len(files) != 1 or not files[0].is_file() or files[0].is_symlink():
+                raise HTTPException(422, f'附件不可读取：{attachment_id}')
+            attachments.append(files[0])
+        if attachments:
+            lines = [QUEUE_ATTACHMENT_MARKER.strip(), '以下是本次任务上传的本机文件。请读取这些文件，并与上面的指令一同处理：']
+            lines.extend(f'- {path.name}：{path}' for path in attachments)
+            data['prompt'] += '\n\n' + '\n'.join(lines)
+            if len(data['prompt']) > 100000:
+                raise HTTPException(422, '指令和附件路径合计不能超过 100000 字符')
+        return data
+
     @app.post('/api/night-queue/items',status_code=201)
     def add_queue_item(value:QueueItemInput):
-        data=value.model_dump()
+        data=attach_queue_files(value.model_dump())
         data['cwd']=str(Path(data['cwd']).expanduser().resolve())
         if not Path(data['cwd']).is_dir():
             raise HTTPException(422,'工作目录不存在')
@@ -411,7 +477,7 @@ def create_app(store=None, background=True):
 
     @app.put('/api/night-queue/items/{item_id}')
     def edit_queue_item(item_id:int,value:QueueItemInput):
-        data=value.model_dump()
+        data=attach_queue_files(value.model_dump())
         data['cwd']=str(Path(data['cwd']).expanduser().resolve())
         if not Path(data['cwd']).is_dir():
             raise HTTPException(422,'工作目录不存在')

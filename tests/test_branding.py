@@ -16,9 +16,15 @@ def test_current_product_branding():
     readme = read_repo_file('README.md')
     prd = read_repo_file('PRD.md')
     license_text = read_repo_file('LICENSE')
+    app_source = read_repo_file('analyzer/app.py')
+    prompt_history_source = read_repo_file('analyzer/prompt_history.py')
+    i18n_source = read_repo_file('frontend/src/i18n.ts')
 
     assert '<title>Coco Codex管家</title>' in index_html
     assert '<div>Coco<span>Codex管家</span></div>' in main_source
+    assert "QUEUE_ATTACHMENT_MARKER = '\\n\\n[Coco Codex管家附件]'" in prompt_history_source
+    assert 'QUEUE_ATTACHMENT_MARKER.strip()' in app_source
+    assert "document.title = 'Coco Codex管家';" in i18n_source
     assert readme.startswith('# Coco Codex管家\n')
     assert prd.startswith('# Coco Codex管家主 PRD\n')
     assert 'Coco Codex管家是一个本机运行的非官方 Codex 用量分析工具。' in prd
@@ -41,7 +47,9 @@ def test_current_product_surfaces_exclude_old_branding():
         'LICENSE',
         'analyzer/app.py',
         'analyzer/night_queue.py',
+        'analyzer/prompt_history.py',
         'frontend/index.html',
+        'frontend/src/i18n.ts',
         'frontend/src/main.tsx',
     )
 
