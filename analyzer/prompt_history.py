@@ -13,6 +13,11 @@ INTERNAL_SOURCES = {'subagent', 'guardian_review'}
 USER_CONTENT_KINDS = {'user.text', 'user.image', 'user.file', 'user.audio',
                       'user.video', 'user.attachment'}
 CONTROL_TAG = re.compile(r'^</?[a-z][a-z0-9_-]*(?:\s[^<>]*)?>', re.IGNORECASE)
+QUEUE_ATTACHMENT_MARKER = '\n\n[Coco Codex管家附件]'
+
+
+def _without_queue_attachment_paths(value):
+    return value.split(QUEUE_ATTACHMENT_MARKER, 1)[0].strip()
 
 
 def _user_text(value):
@@ -59,7 +64,7 @@ def _user_text(value):
         return '', 0
     if CONTROL_TAG.match(stripped):
         return '', 0
-    return stripped, 0
+    return _without_queue_attachment_paths(stripped), 0
 
 
 class PromptHistory:
@@ -196,13 +201,16 @@ class PromptHistory:
                 'id': thread_id, 'title': info.get('name') or info.get('title') or row['title'],
                 'project': info.get('cwd') or row['cwd'] or '未归属项目',
                 'codex_project': info.get('codex_project_name') or '', 'prompts': []})
-            if any(p['turn_id'] == row['turn_id'] and p['text'].strip() == row['prompt'].strip()
+            user_prompt = _without_queue_attachment_paths(row['prompt'])
+            if any(p['turn_id'] == row['turn_id'] and p['text'].strip() == user_prompt
                    for p in task['prompts']):
                 continue
             task['prompts'].append({
                 'id': f'queue-{thread_id}-{row["turn_id"]}', 'turn_id': row['turn_id'],
-                'at': row['started_at'], 'text': row['prompt'], 'attachments': 0,
-                'characters': len(row['prompt']), 'source': 'queue'})
+                'at': row['started_at'], 'text': user_prompt,
+                'attachments': row['prompt'].split(QUEUE_ATTACHMENT_MARKER, 1)[1].count('\n- ')
+                if QUEUE_ATTACHMENT_MARKER in row['prompt'] else 0,
+                'characters': len(user_prompt), 'source': 'queue'})
 
         projects = {}
         for task in threads.values():
