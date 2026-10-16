@@ -198,7 +198,7 @@ def create_app(store=None, background=True):
             night_queue.wake.set()
             await asyncio.to_thread(queue_worker.join,10)
 
-    app = FastAPI(title='Codex Token 本地账本',lifespan=lifespan)
+    app = FastAPI(title='Coco Codex管家',lifespan=lifespan)
     instance_id = uuid.uuid4().hex
     app.state.store = store
     app.state.night_queue = night_queue
@@ -634,7 +634,7 @@ def create_app(store=None, background=True):
     def export_snapshot(f=Depends(filters)):
         view=json_safe(analytics().overview(f))
         payload={'format':'codex-token-snapshot','version':1,'generated_at':datetime.now().astimezone().isoformat(),'timezone':'Asia/Shanghai','filters':f,'metrics':view['metrics'],'daily':view['daily'],'by_model':view['by_model'],'by_project':view['by_project']}
-        return JSONResponse(payload,headers={'Content-Disposition':'attachment; filename="codex-token-snapshot.json"'})
+        return JSONResponse(payload,headers={'Content-Disposition':'attachment; filename="coco-codex-manager-snapshot.json"'})
 
     def report_payload(f):
         a=analytics();view=a.analysis(f,1,10,1,10)
@@ -648,13 +648,13 @@ def create_app(store=None, background=True):
 
     @app.get('/api/export.report.json')
     def export_report_json(f=Depends(filters)):
-        return JSONResponse(report_payload(f),headers={'Content-Disposition':'attachment; filename="codex-token-report.json"'})
+        return JSONResponse(report_payload(f),headers={'Content-Disposition':'attachment; filename="coco-codex-manager-report.json"'})
 
     @app.get('/api/export.report.md')
     def export_report_markdown(f=Depends(filters)):
         report=report_payload(f);m=report['metrics']
         def safe(value): return str(value or '').replace('|','\\|').replace('\n',' ')
-        lines=['# Codex Token 用量报告','',f'- 生成时间：{report["generated_at"]}',
+        lines=['# Coco Codex管家用量报告','',f'- 生成时间：{report["generated_at"]}',
                f'- 时间范围：{f["start"] or "不限"} 至 {f["end"] or "不限"}',
                f'- Token 总量：{m["total_tokens"]:,}',f'- 调用次数：{m["call_count"]:,}',
                f'- 缓存命中率：{m["cache_hit_rate"]:.1%}' if m['cache_hit_rate'] is not None else '- 缓存命中率：未知','',
@@ -665,7 +665,7 @@ def create_app(store=None, background=True):
         lines += ['','## 异常记录','']
         lines += [f'- {x["kind"]}：{safe(x["id"])}，为中位数的 {x["ratio"]:.1f} 倍。' for x in report['anomalies']] or ['- 未发现符合当前规则的离群点。']
         lines += ['','## 口径说明','']+[f'- {x}' for x in report['data_notes']]
-        return Response('\n'.join(lines)+'\n',media_type='text/markdown; charset=utf-8',headers={'Content-Disposition':'attachment; filename="codex-token-report.md"'})
+        return Response('\n'.join(lines)+'\n',media_type='text/markdown; charset=utf-8',headers={'Content-Disposition':'attachment; filename="coco-codex-manager-report.md"'})
 
     dist=BASE/'frontend'/'dist'
     if (dist/'assets').is_dir():
