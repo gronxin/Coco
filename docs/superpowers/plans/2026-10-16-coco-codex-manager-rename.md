@@ -1,6 +1,6 @@
 # Coco Codex管家 Rename Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Replace every current user-facing “Codex Token 账本” product identity with “Coco Codex管家” while preserving all installed-service, storage, package, and JSON-format identifiers.
 
@@ -29,7 +29,7 @@
 - Modify: `tests/test_api.py`
 - Modify: `analyzer/app.py`
 
-- [ ] **Step 1: Write failing API assertions**
+- [x] **Step 1: Write failing API assertions**
 
 Add exact assertions:
 
@@ -67,7 +67,7 @@ assert markdown.headers['content-disposition'] == (
 assert markdown.text.startswith('# Coco Codex管家用量报告\n')
 ```
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run:
 
@@ -78,7 +78,7 @@ Run:
 
 Expected: FAIL on the old OpenAPI title, old download filenames, and old Markdown heading.
 
-- [ ] **Step 3: Apply the minimal backend rename**
+- [x] **Step 3: Apply the minimal backend rename**
 
 In `analyzer/app.py`:
 
@@ -87,13 +87,13 @@ In `analyzer/app.py`:
 - use `# Coco Codex管家用量报告`;
 - leave `codex-token-snapshot`, `codex-token-weekly-report`, version numbers, and payload keys unchanged.
 
-- [ ] **Step 4: Run focused API tests**
+- [x] **Step 4: Run focused API tests**
 
 Run the command from Step 2.
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add analyzer/app.py tests/test_api.py
@@ -106,7 +106,7 @@ git commit -m "feat: rename public API branding"
 - Modify: `tests/test_night_queue.py`
 - Modify: `analyzer/night_queue.py`
 
-- [ ] **Step 1: Write failing queue branding assertions**
+- [x] **Step 1: Write failing queue branding assertions**
 
 Add a test using `getattr` so it fails before constants exist:
 
@@ -144,7 +144,7 @@ Extend an existing fresh-thread runner test, or add a focused runner test, to as
 assert thread_start['params']['serviceName'] == 'codex_token_analyzer_queue'
 ```
 
-- [ ] **Step 2: Run the focused test and verify failure**
+- [x] **Step 2: Run the focused test and verify failure**
 
 Run:
 
@@ -155,7 +155,7 @@ Run:
 
 Expected: FAIL because the branding constants are not defined.
 
-- [ ] **Step 3: Centralize and apply queue branding**
+- [x] **Step 3: Centralize and apply queue branding**
 
 Add module constants:
 
@@ -174,13 +174,13 @@ DESKTOP_BRIDGE_INSTRUCTION = (
 
 Use them in `_start_server`, `AppServerRunner.run`, and `NightQueue._notify_bridge_pending`. Do not change protocol behavior.
 
-- [ ] **Step 4: Run focused queue tests**
+- [x] **Step 4: Run focused queue tests**
 
 Run the command from Step 2.
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add analyzer/night_queue.py tests/test_night_queue.py
@@ -197,7 +197,7 @@ git commit -m "feat: rename queue-facing product title"
 - Modify: `PRD.md`
 - Modify: `LICENSE`
 
-- [ ] **Step 1: Write the failing static branding contract**
+- [x] **Step 1: Write the failing static branding contract**
 
 Create `tests/test_branding.py` with repository-root reads that assert:
 
@@ -265,7 +265,7 @@ stable_identifiers = {
 
 Iterate through this mapping and assert every literal remains present.
 
-- [ ] **Step 2: Run the branding test and verify failure**
+- [x] **Step 2: Run the branding test and verify failure**
 
 Run:
 
@@ -275,7 +275,7 @@ Run:
 
 Expected: FAIL on Web and document names.
 
-- [ ] **Step 3: Update Web and current documents**
+- [x] **Step 3: Update Web and current documents**
 
 - Render `Coco<span>Codex管家</span>` in the existing brand component.
 - Set the HTML title to `Coco Codex管家`.
@@ -283,7 +283,7 @@ Expected: FAIL on Web and document names.
 - Replace the LICENSE contributor identity.
 - Do not edit historical files under `docs/superpowers/**`, `docs/implementation-plan.md`, or `docs/task-queue-design.md`.
 
-- [ ] **Step 4: Run static branding tests and frontend build**
+- [x] **Step 4: Run static branding tests and frontend build**
 
 Run:
 
@@ -294,7 +294,7 @@ cd frontend && npm run build
 
 Expected: pytest PASS and Vite build completes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/test_branding.py frontend/src/main.tsx frontend/index.html README.md PRD.md LICENSE
@@ -306,7 +306,7 @@ git commit -m "feat: rename product to Coco Codex manager"
 **Files:**
 - Verify only; no planned source edits.
 
-- [ ] **Step 0: Preserve the known test baseline**
+- [x] **Step 0: Preserve the known test baseline**
 
 Before implementation, the repository baseline is `98 passed, 4 failed`. The
 known unrelated failures are:
@@ -321,7 +321,7 @@ tests/test_night_queue.py::test_exhausted_task_waits_even_when_reset_time_is_unk
 This rename does not change those behaviors. Final verification must show every
 new or modified branding test passing and no failures beyond these four.
 
-- [ ] **Step 1: Run full automated verification**
+- [x] **Step 1: Run full automated verification**
 
 Run:
 
@@ -334,14 +334,14 @@ Expected: Vite build succeeds; pytest reports `98 + newly added tests` passing
 and only the same four named baseline failures. Any additional failure is a
 regression and must be fixed before proceeding.
 
-- [ ] **Step 2: Scan old public names and stable internal identifiers**
+- [x] **Step 2: Scan old public names and stable internal identifiers**
 
 Run `tests/test_branding.py` plus focused `rg` checks over current product files. Expected:
 
 - no forbidden old product self-name remains;
 - every stable identifier listed in the Task 3 mapping remains in its exact owning file.
 
-- [ ] **Step 3: Sync and restart the installed macOS service**
+- [x] **Step 3: Sync and restart the installed macOS service**
 
 Read the service state and capture the current process identity:
 
@@ -383,7 +383,7 @@ Use `http://127.0.0.1:8766` for browser verification. Use the same isolated app
 when no managed service is installed. Keep the process running through Step 4,
 then stop it cleanly and remove `ISOLATED_ROOT`.
 
-- [ ] **Step 4: Verify the real Web UI with `@webapp-testing`**
+- [x] **Step 4: Verify the real Web UI with `@webapp-testing`**
 
 Open the Step 3 URL with Playwright and attach listeners for `pageerror` plus
 console messages whose type is `error`. At both `1440 × 900` and `390 × 844`:
@@ -403,7 +403,7 @@ console messages whose type is `error`. At both `1440 × 900` and `390 × 844`:
 Expected URL: `http://127.0.0.1:8765` for the restarted managed service, otherwise
 `http://127.0.0.1:8766` for the isolated full application.
 
-- [ ] **Step 5: Check final Git state**
+- [x] **Step 5: Check final Git state**
 
 Run:
 
