@@ -18,6 +18,7 @@ def client(fixture_store):
 
 
 def test_endpoints_and_csv_agree(client):
+    assert client.get('/openapi.json').json()['info']['title']=='Coco Codex管家'
     query='?start=2026-09-09&end=2026-09-09&model=test-model'
     overview=client.get('/api/overview'+query).json()
     tasks=client.get('/api/tasks'+query).json()['items']
@@ -84,8 +85,11 @@ def test_tools_budgets_snapshot_and_period_comparison(client):
     assert 'previous' in overview['today'] and 'token_change' in overview['week'] and 'calendar' in overview
     assert overview['quota']['status']=='unavailable'
     assert client.get('/api/quota').json()['status']=='unavailable'
-    snap=client.get('/api/export.snapshot.json').json()
-    assert snap['format']=='codex-token-snapshot' and 'daily' in snap and 'conversation' not in snap
+    response=client.get('/api/export.snapshot.json')
+    assert response.headers['content-disposition']=='attachment; filename="coco-codex-manager-snapshot.json"'
+    snap=response.json()
+    assert set(snap)=={'format','version','generated_at','timezone','filters','metrics','daily','by_model','by_project'}
+    assert (snap['format'],snap['version'])==('codex-token-snapshot',1)
 
 
 def test_activity_index_privacy_and_revision_idempotence(fixture_store):
@@ -144,9 +148,15 @@ def test_new_analysis_dimensions_and_reports(client):
     assert {'anomalies','task_efficiency','model_comparison'} <= analysis.keys()
     assert analysis['task_efficiency'][0]['turn_count']>=1
     report=client.get('/api/export.report.json')
-    assert report.status_code==200 and report.json()['format']=='codex-token-weekly-report'
+    assert report.status_code==200
+    assert report.headers['content-disposition']=='attachment; filename="coco-codex-manager-report.json"'
+    payload=report.json()
+    assert set(payload)=={'format','version','generated_at','timezone','filters','metrics','weekly_comparison','anomalies','model_comparison','top_tasks','data_notes'}
+    assert (payload['format'],payload['version'])==('codex-token-weekly-report',1)
     markdown=client.get('/api/export.report.md')
-    assert markdown.status_code==200 and '# Codex Token 用量报告' in markdown.text
+    assert markdown.status_code==200
+    assert markdown.headers['content-disposition']=='attachment; filename="coco-codex-manager-report.md"'
+    assert markdown.text.startswith('# Coco Codex管家用量报告\n')
 
 
 def test_multiple_local_sources_merge_without_duplicate_sync(tmp_path):
