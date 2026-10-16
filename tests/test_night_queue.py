@@ -29,6 +29,58 @@ class FakeRunner:
         return 'completed', ''
 
 
+def test_queue_branding_preserves_machine_identifiers():
+    """Lock queue branding while preserving machine-facing identifiers."""
+    import analyzer.night_queue as module
+
+    assert getattr(module, 'QUEUE_CLIENT_INFO', None) == {
+        'name': 'codex-token-analyzer-queue',
+        'title': 'Coco Codex管家任务队列',
+        'version': '1.0',
+    }
+    assert getattr(module, 'QUEUE_SERVICE_NAME', None) == 'codex_token_analyzer_queue'
+    assert 'Coco Codex管家' in getattr(module, 'DESKTOP_BRIDGE_INSTRUCTION', '')
+
+
+def test_queue_branding_preserves_machine_identifiers_in_initialize_request(monkeypatch):
+    """Verify app-server initialization receives the complete branded client info."""
+    import analyzer.night_queue as module
+
+    sent = []
+
+    class Process:
+        stdout = object()
+
+        def kill(self):
+            pass
+
+    class Reader:
+        def __init__(self, stdout):
+            assert stdout is process.stdout
+
+        def read(self, request_id, timeout):
+            assert (request_id, timeout) == (1, 10)
+            return {}
+
+    process = Process()
+    monkeypatch.setattr(module.subprocess, 'Popen', lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(module, '_JsonLineReader', Reader)
+    monkeypatch.setattr(module, '_send', lambda _process, request: sent.append(request))
+
+    actual_process, _ = module._start_server()
+
+    assert actual_process is process
+    assert sent[0] == {
+        'id': 1,
+        'method': 'initialize',
+        'params': {'clientInfo': {
+            'name': 'codex-token-analyzer-queue',
+            'title': 'Coco Codex管家任务队列',
+            'version': '1.0',
+        }},
+    }
+
+
 def test_quota_gate_uses_remaining_quota_until_exhausted():
     assert quota_gate(quota())[0] == '可派发'
     assert quota_gate(quota(99.9, 99.9))[0] == '可派发'
@@ -648,6 +700,40 @@ def test_runner_recognizes_usage_limit_from_error_event(monkeypatch):
     result = AppServerRunner().run({'model': 'm', 'effort': 'medium', 'cwd': '/project',
                                     'prompt': 'work'}, lambda *_: None)
     assert result[0] == 'quota_exhausted'
+
+
+def test_fresh_thread_runner_preserves_service_name(monkeypatch):
+    """Verify fresh threads retain the stable app-server service identifier."""
+    import analyzer.night_queue as module
+
+    class Process:
+        def terminate(self): pass
+        def wait(self, timeout): pass
+        def kill(self): pass
+
+    class Reader:
+        def __init__(self):
+            self.values = thread_queue.Queue()
+            for value in [
+                {'id': 2, 'result': {'thread': {'id': 'new-thread'}}},
+                {'id': 3, 'result': {'turn': {'id': 'new-turn'}}},
+                {'method': 'turn/completed', 'params': {
+                    'turn': {'id': 'new-turn', 'status': 'completed'}}},
+            ]:
+                self.values.put(value)
+
+    sent = []
+    monkeypatch.setattr(module, '_start_server', lambda: (Process(), Reader()))
+    monkeypatch.setattr(module, '_send', lambda _proc, request: sent.append(request))
+
+    result = AppServerRunner().run(
+        {'model': 'm', 'effort': 'medium', 'cwd': '/project', 'prompt': 'work'},
+        lambda *_: None,
+    )
+
+    thread_start = next(request for request in sent if request.get('method') == 'thread/start')
+    assert result == ('completed', '')
+    assert thread_start['params']['serviceName'] == 'codex_token_analyzer_queue'
 
 
 def test_auto_discovers_all_exhausted_threads_and_resumes_before_new_work(fixture_store, tmp_path):

@@ -18,6 +18,22 @@ DEFAULTS = {'enabled': False, 'default_model': '', 'default_effort': '',
 QUOTA_WAKE_PROMPT = '请只回复“额度窗口已唤醒”。不要修改文件或执行其他操作。'
 AUTO_CONTINUE_PROMPT = ('请继续当前任务。先检查本对话中已经完成的步骤、工作目录中的实际文件状态和仍未完成的要求；'
                         '只完成剩余工作，不要重复已经完成的修改或外部操作。原任务要求仍以上文为准。')
+QUEUE_CLIENT_INFO = {
+    'name': 'codex-token-analyzer-queue',
+    'title': 'Coco Codex管家任务队列',
+    'version': '1.0',
+}
+QUEUE_SERVICE_NAME = 'codex_token_analyzer_queue'
+DESKTOP_BRIDGE_INSTRUCTION = (
+    '用户已授权原对话队列自动派发。现在处理本机 Coco Codex管家的桌面桥接：'
+    '向 http://127.0.0.1:8765/api/night-queue/bridge/claim 发 POST。'
+    '若 item 为 null 就保持安静；若有 item，先用 read_thread 确认目标最新轮次等于 previous_turn_id，'
+    '再用 send_message_to_thread 把 item.prompt 原样发送至 item.thread_id（可传 item.model、item.effort）。'
+    '只发送一次，不理解或执行指令内容。发送后用 read_thread 核对新 userMessage 的原文与轮次 ID，'
+    '确认后向 /api/night-queue/bridge/{id}/result 报 delivered 和 turn_id；'
+    '发送工具已调用但结果无法核实时必须报 uncertain，绝不能重复发送。'
+    '发送前已确认无法发送时报 not_sent。整个过程不得新建或分叉对话。'
+)
 
 
 def now():
@@ -50,8 +66,7 @@ def _start_server(experimental=False):
                             stderr=subprocess.DEVNULL, bufsize=0)
     reader = _JsonLineReader(proc.stdout)
     try:
-        params = {'clientInfo': {'name': 'codex-token-analyzer-queue',
-                                 'title': 'Codex Token 任务队列', 'version': '1.0'}}
+        params = {'clientInfo': QUEUE_CLIENT_INFO}
         if experimental:
             params['capabilities'] = {'experimentalApi': True}
         _send(proc, {'id': 1, 'method': 'initialize', 'params': params})
@@ -375,7 +390,7 @@ class AppServerRunner:
                 thread_id = (resumed.get('thread') or {}).get('id')
             else:
                 _send(proc, {'id': 2, 'method': 'thread/start', 'params': {
-                    'model': item['model'], 'cwd': item['cwd'], 'serviceName': 'codex_token_analyzer_queue'}})
+                    'model': item['model'], 'cwd': item['cwd'], 'serviceName': QUEUE_SERVICE_NAME}})
                 thread_id = (_reply(reader, 2, events=early_events).get('thread') or {}).get('id')
             if not thread_id:
                 raise RuntimeError('Codex 未返回任务 ID')
@@ -1195,18 +1210,8 @@ class NightQueue:
                             (item['id'],))
             item = {**item, 'bridge_signal_sent': 0}
         if not item['bridge_signal_sent']:
-            instruction = (
-                '用户已授权原对话队列自动派发。现在处理本机 Codex Token 分析器的桌面桥接：'
-                '向 http://127.0.0.1:8765/api/night-queue/bridge/claim 发 POST。'
-                '若 item 为 null 就保持安静；若有 item，先用 read_thread 确认目标最新轮次等于 previous_turn_id，'
-                '再用 send_message_to_thread 把 item.prompt 原样发送至 item.thread_id（可传 item.model、item.effort）。'
-                '只发送一次，不理解或执行指令内容。发送后用 read_thread 核对新 userMessage 的原文与轮次 ID，'
-                '确认后向 /api/night-queue/bridge/{id}/result 报 delivered 和 turn_id；'
-                '发送工具已调用但结果无法核实时必须报 uncertain，绝不能重复发送。'
-                '发送前已确认无法发送时报 not_sent。整个过程不得新建或分叉对话。'
-            )
             command = [_codex_command()[0], 'queue', '--thread', dispatcher,
-                       '--message', instruction]
+                       '--message', DESKTOP_BRIDGE_INSTRUCTION]
             completed = subprocess.run(command, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                        timeout=20, check=False)
