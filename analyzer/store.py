@@ -238,6 +238,34 @@ class Store:
                 con.close()
         return tasks, edges
 
+    def sidebar_projects(self):
+        """Read saved local Codex projects, using each project's primary root."""
+        if self.privacy_mode:
+            return []
+        for root in self.source_roots:
+            candidates = sorted(root.glob('state_*.sqlite'),
+                                key=lambda path: path.stat().st_mtime, reverse=True)
+            for candidate in candidates:
+                con = sqlite3.connect(candidate.as_uri() + '?mode=ro', uri=True, timeout=1)
+                con.row_factory = sqlite3.Row
+                try:
+                    project_cols = {row['name'] for row in con.execute('PRAGMA table_info(projects)')}
+                    root_cols = {row['name'] for row in con.execute('PRAGMA table_info(project_roots)')}
+                    if not {'id', 'name', 'position'} <= project_cols or not {'project_id', 'path', 'position'} <= root_cols:
+                        continue
+                    primary_roots = {}
+                    for row in con.execute('SELECT project_id,path,position FROM project_roots ORDER BY position,path'):
+                        primary_roots.setdefault(row['project_id'], row['path'])
+                    result = []
+                    for row in con.execute('SELECT id,name,position FROM projects ORDER BY position,id'):
+                        path = primary_roots.get(row['id'])
+                        if path and Path(path).is_dir():
+                            result.append({'id': row['id'], 'name': row['name'], 'path': path})
+                    return result
+                finally:
+                    con.close()
+        return []
+
     def _rebuild(self, con):
         sources = defaultdict(list)
         for r in con.execute('SELECT * FROM events ORDER BY path,line'):
