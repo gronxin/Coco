@@ -1,4 +1,4 @@
-# Codex Token 账本
+# Coco Codex管家
 
 一个非官方、本机运行的 Codex 用量分析工具。它只读采集 Codex 会话日志，按任务、轮次、模型调用和执行流程查看 Token，并提供趋势、异常线索、额度状态、CSV/Markdown/JSON 导出、Standard API 等价费用和订阅费用分摊。
 

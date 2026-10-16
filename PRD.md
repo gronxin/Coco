@@ -1,4 +1,4 @@
-# Codex Token 账本主 PRD
+# Coco Codex管家主 PRD
 
 ## 文档原则
 
@@ -6,7 +6,7 @@
 
 ## 产品定位
 
-Codex Token 账本是一个本机运行的非官方 Codex 用量分析工具。它只读采集本机 Codex 会话日志，提供 Token 用量、成本、额度和任务队列视图。
+Coco Codex管家是一个本机运行的非官方 Codex 用量分析工具。它只读采集本机 Codex 会话日志，提供 Token 用量、成本、额度和任务队列视图。
 
 ## 当前能力
 
