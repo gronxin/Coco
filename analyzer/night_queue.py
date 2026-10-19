@@ -1031,7 +1031,10 @@ class NightQueue:
                     (snapshot['turn_id'], snapshot['turn_id'], item['id']))
             self.wake.set()
             return
-        if snapshot.get('turn_status') not in ('completed', 'interrupted'):
+        resumable_failure = (item['source'] in ('auto', 'existing') and
+                             snapshot.get('turn_status') == 'failed' and
+                             snapshot.get('quota_exhausted'))
+        if snapshot.get('turn_status') not in ('completed', 'interrupted') and not resumable_failure:
             return
         reason, retry_at = quota_dispatch_gate(self.store.refresh_quota(), item)
         if reason not in ('可派发', '重置后试发'):
@@ -1170,6 +1173,28 @@ class NightQueue:
                     finished_at=NULL,message='已在原对话确认桌面派发，恢复执行跟踪'
                     WHERE id=? AND status='needs_attention' ''',
                     (snapshot['turn_id'], item['id']))
+
+    def _reconcile_delivered_failures(self, items):
+        """A confirmed started turn must not indefinitely block later follow-ups."""
+        for item in items:
+            if (item['status'] != 'needs_attention' or item['source'] != 'followup' or
+                    not item['started_at'] or not item['anchor_turn_id'] or
+                    not item['turn_id'] or item['turn_id'] == item['anchor_turn_id']):
+                continue
+            try:
+                snapshot = self.thread_provider(item['thread_id'])
+            except Exception as exc:
+                self.last_error = f'已派发失败任务 #{item["id"]} 核对失败：{str(exc)[:130]}'
+                continue
+            if (snapshot.get('id') != item['thread_id'] or
+                    snapshot.get('turn_id') in (None, item['turn_id']) or
+                    snapshot.get('turn_status') != 'completed'):
+                continue
+            with self.store.connect() as con:
+                con.execute('''UPDATE night_queue_items SET status='failed',finished_at=COALESCE(finished_at,?),
+                    message='原指令已送达但原轮次未完成；对话已有后续完成轮次，已释放同对话后续任务'
+                    WHERE id=? AND status='needs_attention' AND turn_id=? AND anchor_turn_id=?''',
+                    (now(), item['id'], item['turn_id'], item['anchor_turn_id']))
 
     def _notify_bridge_pending(self, items):
         item = next((row for row in items if row['status'] == 'bridge_pending'), None)
@@ -1319,6 +1344,7 @@ class NightQueue:
                 ('桥接执行核对', self._poll_bridge_running),
                 ('桥接排队核对', self._poll_bridge_queued),
                 ('不确定派发核对', self._poll_uncertain_deliveries),
+                ('已送达失败任务核对', self._reconcile_delivered_failures),
                 ('桥接超时核对', self._expire_bridge_claims),
             ):
                 try:
@@ -1505,6 +1531,17 @@ class NightQueue:
                             next_attempt_at=NULL,message='额度已自动刷新，无需发送唤醒消息'
                             WHERE id=1''', (previous_boundary,))
                         state = {**state, 'window_reset_at': previous_boundary, 'status': 'done'}
+                # A wake turn can fail after Codex accepts it. Once a fresh quota
+                # snapshot shows a later five-hour window, that old warning is no
+                # longer actionable even if usage never reached exactly 100%.
+                if (state['status'] == 'uncertain' and state['window_reset_at'] and
+                        boundary > state['window_reset_at'] + 3600):
+                    message = '额度已进入下一窗口；上次唤醒异常已结束：' + (state.get('message') or '结果未确认')
+                    with self.store.connect() as con:
+                        con.execute('''UPDATE quota_wake_state SET status='done',
+                            next_attempt_at=NULL,message=? WHERE id=1 AND status='uncertain' ''',
+                            (message[:180],))
+                    state = {**state, 'status': 'done', 'message': message[:180]}
             if boundary + 5 > time.time() or (week['usedPercent'] >= 100 and week['resetsAt'] > time.time()):
                 return
             if state['window_reset_at'] == boundary:
