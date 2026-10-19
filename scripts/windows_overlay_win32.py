@@ -175,30 +175,38 @@ class Win32Api:
 
     def enable_per_monitor_dpi(self):
         """Enable per-monitor DPI awareness before Tk creates any windows."""
-        return self._native.set_process_dpi_awareness()
+        if not self._native.set_process_dpi_awareness():
+            raise OSError("无法启用 Windows Per-Monitor DPI awareness")
+        return True
 
     def foreground_codex_window(self):
         """Return the valid foreground Codex target or None."""
-        hwnd = self._native.get_foreground_window()
-        if not hwnd:
-            return None
-        if not self._native.is_window_visible(hwnd) or self._native.is_iconic(hwnd):
-            return None
-        pid = self._native.get_window_process_id(hwnd)
-        process_name = self._native.get_process_name(pid)
-        title = self._native.get_window_text(hwnd)
-        executable = PureWindowsPath(process_name).name.lower()
-        accepted = executable == "codex.exe" or (
-            executable == "chatgpt.exe" and "codex" in title.lower()
-        )
-        if not accepted:
-            return None
-        rect = self._native.get_extended_frame_bounds(hwnd)
-        if rect is None:
-            rect = self._native.get_window_rect(hwnd)
-        dpi = int(self._native.get_dpi_for_window(hwnd) or 96)
-        minimum = int(120 * dpi / 96 + 0.5)
-        if rect[2] - rect[0] < minimum or rect[3] - rect[1] < minimum:
+        try:
+            hwnd = self._native.get_foreground_window()
+            if not hwnd:
+                return None
+            if not self._native.is_window_visible(hwnd) or self._native.is_iconic(
+                hwnd
+            ):
+                return None
+            pid = self._native.get_window_process_id(hwnd)
+            process_name = self._native.get_process_name(pid)
+            title = self._native.get_window_text(hwnd)
+            executable = PureWindowsPath(process_name).name.lower()
+            accepted = executable == "codex.exe" or (
+                executable == "chatgpt.exe" and "codex" in title.lower()
+            )
+            if not accepted:
+                return None
+            rect = self._native.get_extended_frame_bounds(hwnd)
+            if rect is None:
+                rect = self._native.get_window_rect(hwnd)
+            dpi = int(self._native.get_dpi_for_window(hwnd) or 96)
+            minimum = int(120 * dpi / 96 + 0.5)
+            if rect[2] - rect[0] < minimum or rect[3] - rect[1] < minimum:
+                return None
+            work_area = tuple(self._native.get_monitor_work_area(hwnd))
+        except (OSError, TypeError, ValueError):
             return None
         return TargetWindow(
             hwnd=hwnd,
@@ -206,7 +214,7 @@ class Win32Api:
             process_name=process_name,
             title=title,
             rect=tuple(rect),
-            work_area=tuple(self._native.get_monitor_work_area(hwnd)),
+            work_area=work_area,
             dpi=dpi,
         )
 
@@ -270,6 +278,7 @@ class _CtypesNative:
         self.user32 = ctypes.WinDLL("user32", use_last_error=True)
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self.dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+        self.gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
         try:
             self.shcore = ctypes.WinDLL("shcore", use_last_error=True)
         except OSError:
@@ -324,6 +333,23 @@ class _CtypesNative:
         self.user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
         self.user32.ReleaseDC.restype = ctypes.c_int
         self._configure_optional_user32_signatures()
+        self.gdi32.GetDeviceCaps.argtypes = [wintypes.HDC, ctypes.c_int]
+        self.gdi32.GetDeviceCaps.restype = ctypes.c_int
+        if self.shcore is not None:
+            self.shcore.SetProcessDpiAwareness.argtypes = [ctypes.c_int]
+            self.shcore.SetProcessDpiAwareness.restype = wintypes.LONG
+            self.shcore.GetProcessDpiAwareness.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(ctypes.c_int),
+            ]
+            self.shcore.GetProcessDpiAwareness.restype = wintypes.LONG
+            self.shcore.GetDpiForMonitor.argtypes = [
+                wintypes.HANDLE,
+                ctypes.c_int,
+                ctypes.POINTER(wintypes.UINT),
+                ctypes.POINTER(wintypes.UINT),
+            ]
+            self.shcore.GetDpiForMonitor.restype = wintypes.LONG
 
         self.kernel32.CreateMutexW.argtypes = [
             wintypes.LPVOID,
@@ -393,6 +419,16 @@ class _CtypesNative:
         if set_context is not None:
             set_context.argtypes = [ctypes.c_void_p]
             set_context.restype = wintypes.BOOL
+        get_context = getattr(self.user32, "GetThreadDpiAwarenessContext", None)
+        if get_context is not None:
+            get_context.argtypes = []
+            get_context.restype = ctypes.c_void_p
+        contexts_equal = getattr(
+            self.user32, "AreDpiAwarenessContextsEqual", None
+        )
+        if contexts_equal is not None:
+            contexts_equal.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            contexts_equal.restype = wintypes.BOOL
         get_long = getattr(self.user32, "GetWindowLongPtrW", None)
         set_long = getattr(self.user32, "SetWindowLongPtrW", None)
         if get_long is not None and set_long is not None:
@@ -481,18 +517,31 @@ class _CtypesNative:
         return (rect.left, rect.top, rect.right, rect.bottom)
 
     def get_dpi_for_window(self, hwnd):
-        """Return per-window DPI with a system-DPI fallback."""
+        """Return effective target-monitor DPI with legacy API fallbacks."""
         function = getattr(self.user32, "GetDpiForWindow", None)
         if function is not None:
             value = function(hwnd)
             if value:
                 return int(value)
+        if self.shcore is not None:
+            monitor = self.user32.MonitorFromWindow(
+                hwnd, MONITOR_DEFAULTTONEAREST
+            )
+            dpi_x = self.wintypes.UINT()
+            dpi_y = self.wintypes.UINT()
+            result = self.shcore.GetDpiForMonitor(
+                monitor,
+                0,
+                self.ctypes.byref(dpi_x),
+                self.ctypes.byref(dpi_y),
+            )
+            if result == 0 and dpi_x.value:
+                return int(dpi_x.value)
         device_context = self.user32.GetDC(hwnd)
         if not device_context:
             return 96
         try:
-            gdi32 = self.ctypes.WinDLL("gdi32", use_last_error=True)
-            return int(gdi32.GetDeviceCaps(device_context, 88) or 96)
+            return int(self.gdi32.GetDeviceCaps(device_context, 88) or 96)
         finally:
             self.user32.ReleaseDC(hwnd, device_context)
 
@@ -500,13 +549,29 @@ class _CtypesNative:
         """Enable Per-Monitor V2 awareness with legacy fallbacks."""
         context = self.ctypes.c_void_p(-4)
         function = getattr(self.user32, "SetProcessDpiAwarenessContext", None)
-        if function is not None and function(context):
-            return True
+        if function is not None:
+            if function(context):
+                return True
+            get_context = getattr(
+                self.user32, "GetThreadDpiAwarenessContext", None
+            )
+            contexts_equal = getattr(
+                self.user32, "AreDpiAwarenessContextsEqual", None
+            )
+            if get_context is None or contexts_equal is None:
+                return False
+            return bool(contexts_equal(get_context(), context))
         if self.shcore is not None:
             result = self.shcore.SetProcessDpiAwareness(2)
-            if result in (0, -2147024891):
+            if result == 0:
                 return True
-        return bool(self.user32.SetProcessDPIAware())
+            if result == -2147024891:
+                awareness = self.ctypes.c_int()
+                query = self.shcore.GetProcessDpiAwareness(
+                    None, self.ctypes.byref(awareness)
+                )
+                return query == 0 and awareness.value == 2
+        return False
 
     def get_window_ex_style(self, hwnd):
         """Read the pointer-sized extended window style."""

@@ -35,6 +35,7 @@ class FakeNative:
         self.wait_result = WAIT_TIMEOUT
         self.process_creation_time = 123456789
         self.process_path = r"C:\Python311\pythonw.exe"
+        self.dpi_awareness_result = True
         self.closed = []
         self.calls = []
 
@@ -90,7 +91,7 @@ class FakeNative:
     def set_process_dpi_awareness(self):
         """Record process DPI-awareness activation."""
         self.calls.append(("set_process_dpi_awareness",))
-        return True
+        return self.dpi_awareness_result
 
     def get_window_ex_style(self, hwnd):
         """Return the configured extended window style."""
@@ -171,6 +172,15 @@ def test_module_imports_but_production_adapter_rejects_non_windows():
             Win32Api()
 
 
+def test_dpi_awareness_failure_is_not_reported_as_success():
+    """Fail startup when the native backend cannot establish per-monitor DPI."""
+    native = FakeNative()
+    native.dpi_awareness_result = False
+
+    with pytest.raises(OSError, match="DPI"):
+        Win32Api(native).enable_per_monitor_dpi()
+
+
 @pytest.mark.parametrize(
     ("process_name", "title", "accepted"),
     [
@@ -236,6 +246,31 @@ def test_window_selection_falls_back_to_get_window_rect():
 
     assert target.rect == native.fallback_rect
     assert ("get_window_rect", 101) in native.calls
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "get_process_name",
+        "get_extended_frame_bounds",
+        "get_window_rect",
+        "get_monitor_work_area",
+        "get_dpi_for_window",
+    ],
+)
+def test_window_disappearing_during_snapshot_returns_none(method_name):
+    """Treat expected native lookup races as an unavailable target window."""
+    native = FakeNative()
+    if method_name == "get_window_rect":
+        native.extended_rect = None
+
+    def fail(*_args):
+        """Simulate the foreground HWND or process disappearing mid-query."""
+        raise OSError("window disappeared")
+
+    setattr(native, method_name, fail)
+
+    assert Win32Api(native).foreground_codex_window() is None
 
 
 def test_nonactivating_styles_are_ored_without_mouse_transparency():
