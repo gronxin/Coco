@@ -67,7 +67,18 @@ macOS 还可安装独立的额度导航按钮：
 .venv/bin/python scripts/macos_overlay.py install
 ```
 
-切换到 Codex 桌面应用后，按钮显示在左侧导航栏底部并跟随当前 Codex 窗口。点击按钮显示或隐藏额度浮窗；未自定义位置时，浮窗默认位于按钮右侧 8 点并与按钮底边对齐。任务区域展开时显示待执行总数和前五条任务，点击右侧向上或向下箭头可折叠或展开；点击其他标题、数量、时间戳和空白区域不会打开 Web 页面。点击额度环打开用量总览，点击具体任务打开任务队列。浮窗可拖动，保存的是相对 Codex 窗口的位置。可用 `.venv/bin/python scripts/macos_overlay.py status` 查看状态，或用 `uninstall` 移除。
+切换到 Codex 桌面应用后，按钮显示在左侧导航栏底部并跟随当前 Codex 窗口。点击按钮显示或隐藏额度浮窗；未自定义位置时，浮窗默认位于按钮右侧 8 点，浮窗底边相对按钮底边向上 96 点。任务区域展开时显示待执行总数和前五条任务，点击右侧向上或向下箭头可折叠或展开；点击其他标题、数量、时间戳和空白区域不会打开 Web 页面。点击额度环打开用量总览，点击具体任务打开任务队列。浮窗可拖动，保存的是相对 Codex 窗口的位置。可用 `.venv/bin/python scripts/macos_overlay.py status` 查看状态，或用 `uninstall` 移除。
+
+Windows 10/11 原生桌面可安装额度浮窗预览版。先保持本机 Web 服务运行，再在 PowerShell 中执行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\windows_overlay.py install
+.\.venv\Scripts\python.exe scripts\windows_overlay.py status
+```
+
+安装器不请求管理员权限，运行文件写入 `%LOCALAPPDATA%\CocoCodexManager\overlay`，并通过当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 登录启动。浮窗仅识别 Windows 原生 Codex 桌面窗口，不支持从 WSL 直接显示。卸载代码和登录启动项时执行 `.\.venv\Scripts\python.exe scripts\windows_overlay.py uninstall`；用户保存的浮窗位置和折叠状态会保留。
+
+Windows 实现已在 macOS 开发环境完成纯逻辑、Win32 假后端、HTTP 生命周期、控制器和安装事务自动化测试，但尚未分别完成 Windows 10 与 Windows 11 原生桌面验收。在真机验收完成前按预览功能使用。
 
 可选环境变量：
 
