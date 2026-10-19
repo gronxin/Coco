@@ -24,17 +24,25 @@
 
 ### Windows
 
-新增三个模块：
+新增六个模块：
 
 - `scripts/windows_overlay_support.py`
   - 纯逻辑，不依赖 Windows GUI。
   - 负责缩放、锚点、屏幕钳制、点击命中、拖动阈值、队列过滤和状态校验。
+- `scripts/windows_overlay_win32.py`
+  - 延迟加载的 Win32 `ctypes` 适配器。
+  - 负责窗口、DPI、非激活样式、进程、命名对象和工作区 API。
+- `scripts/windows_overlay_worker.py`
+  - 负责有界 HTTP 轮询、latest-wins 数据传递、实例/ready 文件和退出生命周期。
 - `scripts/windows_quota_overlay.py`
   - Tkinter 运行时。
-  - 通过 `ctypes` 调用 Win32 API，负责前台窗口识别、双浮窗绘制、跟随、交互和数据刷新。
+  - 组合纯逻辑、Win32 适配器和 worker，负责双浮窗绘制、跟随与交互。
 - `scripts/windows_overlay.py`
   - 提供 `install | status | uninstall`。
   - 将运行文件复制到当前用户的本地应用数据目录，并注册当前用户登录启动。
+- `scripts/windows_overlay_launcher.pyw`
+  - 作为稳定启动入口读取原子版本指针。
+  - 检查安装锁，并通过 `runpy` 启动当前版本运行时。
 
 Windows 实现只使用 Python 标准库，不新增运行时依赖。
 
@@ -111,7 +119,7 @@ Windows 实现只使用 Python 标准库，不新增运行时依赖。
   - `http://127.0.0.1:8765/api/quota`
   - `http://127.0.0.1:8765/api/night-queue`
 - 使用单个后台工作线程串行读取两个接口，每个接口最多一个在途请求，不允许轮次重叠。
-- 每个请求连接和读取总超时为 3 秒，响应上限为 1 MiB；超限、畸形 JSON 或字段类型不符均作为本轮失败。
+- 每个请求使用 `http.client` 和 monotonic deadline 保证连接加完整读取总时长不超过 3 秒；每次阻塞操作前把 socket timeout 更新为剩余时间。响应上限为 1 MiB；超限、畸形 JSON或字段类型不符均作为本轮失败。
 - 网络线程只解析数据；结果通过容量为 1 的 latest-wins 队列交给 Tk 主线程，满时替换旧结果。
 - 最多保留五条任务标题，每条截断到 200 个 Unicode 字符；状态和错误文本截断到 300 个字符。
 - 额度请求失败时保留最后成功值并显示旧数据状态。
@@ -152,20 +160,21 @@ Windows 实现只使用 Python 标准库，不新增运行时依赖。
 安装行为：
 
 1. 验证当前平台为 Windows，并定位同一虚拟环境的 `pythonw.exe`。
-2. 在写入任何文件或注册表前，完整记录旧 HKCU Run 值、launcher 内容、`current.json` 内容、`instance.json` 和已有版本目录。
-3. 将新运行文件完整写入 `%LOCALAPPDATA%\CocoCodexManager\overlay\versions\<version>` 临时目录，校验后原子改名为版本目录。
-4. 稳定的 `overlay_launcher.pyw` 读取 `current.json` 指针并通过 `runpy` 启动当前版本；启动命令使用绝对路径。
-5. 在 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 写入 `CocoCodexManagerOverlay`，直接调用 `pythonw.exe overlay_launcher.pyw`，不创建 `.cmd`，登录时不显示终端窗口。
-6. 新版本目录、launcher、指针和注册表共同属于一次安装事务。
-7. 按持久 PID + 进程句柄协议请求旧实例退出；超时则安装失败，不强杀未知进程。
-8. 原子写入 launcher 和 `current.json`，更新 HKCU Run；生成随机 nonce，通过启动参数传给 launcher 和运行时。
-9. 安装器保留直接启动候选进程的进程句柄。新版本原子写入两份数据：`ready-<nonce>.json` 必须匹配候选 PID、版本和 nonce；持久 `instance.json` 保存 PID、版本、nonce 和启动时间，供 `status` 与后续停止使用。
-10. 新版本未在 8 秒内就绪时，安装器重新触发退出事件并等待候选进程句柄退出，删除迟到或残留的 nonce ready，再恢复旧 HKCU Run、launcher、指针、`instance.json` 和版本集合，复位事件后重启旧版本。
-11. 首次安装失败时执行同样的候选停止流程，并删除本次创建的启动项、launcher、指针、instance、ready 和版本目录，不留下半安装状态。
-12. 成功后删除 nonce ready；运行实例退出时仅在 `instance.json` 的 PID 仍等于自身时删除该文件。最多保留当前和上一个版本。
-13. 不请求管理员权限。
+2. 在写入任何文件或注册表前，完整记录旧 HKCU Run 值、launcher 内容、`current.json` 内容和已有版本目录。`instance.json` 是运行实例元数据，不要求字节级恢复。
+3. `<version>` 是四个版本化运行文件按固定文件名顺序和内容计算的 SHA-256 前 16 位。同版本目录已存在且清单哈希一致时复用；不一致视为损坏并拒绝覆盖。重复安装同一版本用于修复启动项和重启实例，不要求版本号变化。
+4. 将新运行文件完整写入 `%LOCALAPPDATA%\CocoCodexManager\overlay\versions\<version>` 临时目录，校验后原子改名为版本目录。
+5. 稳定的 `overlay_launcher.pyw` 读取 `current.json` 指针并通过 `runpy` 启动当前版本；启动命令使用绝对路径。
+6. 在 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 写入 `CocoCodexManagerOverlay`，直接调用 `pythonw.exe overlay_launcher.pyw`，不创建 `.cmd`，登录时不显示终端窗口。
+7. 新版本目录、launcher、指针和注册表共同属于一次安装事务；候选 ready 且继续存活 500 毫秒后到达 commit 点。commit 后的旧版本清理是幂等维护操作，清理失败不回滚已运行的新版本。
+8. 按持久 PID、进程创建时间和可执行文件路径校验旧实例，再通过进程句柄请求退出；超时则安装失败，不强杀未知进程。
+9. 原子写入 launcher 和 `current.json`，更新 HKCU Run；生成随机 nonce，通过启动参数传给 launcher 和运行时。
+10. 安装器保留直接启动候选进程的进程句柄。候选仅在双窗口创建、非激活样式设置、worker/controller 调度和首轮 Tk 事件循环成功后写 ready。`ready-<nonce>.json` 必须匹配候选 PID、版本和 nonce；持久 `instance.json` 保存 PID、进程创建时间、pythonw 路径、版本、nonce 和启动时间。
+11. 候选未在 8 秒内就绪、ready 后 500 毫秒内退出或身份不匹配时，安装器先停止候选并删除迟到 ready，再恢复静态旧状态，然后使用 rollback nonce 重启旧版本；旧实例会生成新的 `instance.json`，要求版本正确、PID/创建时间有效并重新 ready，不要求恢复旧 instance 字节。
+12. 首次安装失败时执行同样的候选停止流程，并删除本次创建的启动项、launcher、指针、instance、ready 和版本目录，不留下半安装状态。
+13. 成功到达 commit 点后删除 nonce ready，并幂等清理到最多保留当前和上一个版本。运行实例退出时仅在 `instance.json` 的 PID 和创建时间仍等于自身时删除该文件。
+14. 不请求管理员权限。
 
-`status` 返回注册表启动项、当前版本、`instance.json` PID 和进程存活状态。`uninstall` 设置命名退出事件并通过 instance PID 的进程句柄等待退出，删除 HKCU Run 值、launcher、版本、指针和 instance；保留用户状态文件。
+`status` 返回注册表启动项、当前版本、`instance.json` PID 和经 PID + 创建时间 + pythonw 路径校验的进程存活状态。`uninstall` 只对通过同样身份校验的进程请求退出，删除 HKCU Run 值、launcher、版本、指针和 instance；保留 `%LOCALAPPDATA%\CocoCodexManager\overlay-state.json`。
 
 ## 错误处理
 
