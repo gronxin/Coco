@@ -42,7 +42,7 @@ export function NightQueue({api}:{api:Api}){
   async function toggle(){await act('/night-queue/config','PUT',{enabled:!data?.config.enabled})}
   async function restartService(){if(!service?.managed)return;setBusy(true);setError('');setRestartMessage('正在重启服务…');try{await api('/service/restart','POST');for(let attempt=0;attempt<30;attempt++){await new Promise(resolve=>setTimeout(resolve,1000));try{const current:Service=await api('/service/status');if(current.instance_id!==service.instance_id){setService(current);setRestartMessage('服务已重启');await refresh();return}}catch{}}throw new Error('服务未在 30 秒内恢复，请检查本机服务状态')}catch(e){setRestartMessage('');setError(String(e))}finally{setBusy(false)}}
   function edit(item:any){setEditing(item.id);setTitle(item.title);setPrompt(item.prompt);setAttachments([]);setCwd(item.cwd);setTargetThreadId(item.source==='followup'?item.thread_id:'');setModel(item.model);setEffort(item.effort);window.scrollTo({top:0,behavior:'smooth'})}
-  const items=(data?.items||[]).filter((item:any)=>item.status!=='completed'&&item.status!=='watching');
+  const items=(data?.items||[]).filter((item:any)=>!['completed','failed','watching'].includes(item.status));
   const watches=(data?.items||[]).filter((item:any)=>item.status==='watching');
   return <div className="night-queue">
     {(error||queueError||modelError)&&<p className="error" role="alert">{error||queueError||modelError}</p>}

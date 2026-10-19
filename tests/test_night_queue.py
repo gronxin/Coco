@@ -191,6 +191,71 @@ def test_attention_item_does_not_block_other_pending_items(fixture_store, tmp_pa
     assert queue.items()[1]['status'] == 'completed'
 
 
+def test_delivered_failed_followup_releases_later_same_thread_item_after_new_turn(fixture_store, tmp_path):
+    store, _ = fixture_store
+    thread_id = '11111111-1111-1111-1111-111111111111'
+    state = {'id': thread_id, 'cwd': str(tmp_path), 'turn_id': 'original-turn',
+             'turn_status': 'completed', 'archived': False, 'parent_id': None}
+    calls = []
+
+    class Runner:
+        def run(self, item, started):
+            calls.append(item['id'])
+            started(thread_id, 'next-turn')
+            return 'completed', ''
+
+    queue = NightQueue(store, Runner(), lambda: [
+        {'id': 'm', 'efforts': ['medium'], 'default_effort': 'medium'}],
+        lambda _: state)
+    store.refresh_quota = lambda: quota()
+    body = {'title': 'followup', 'prompt': 'Do work', 'cwd': str(tmp_path),
+            'model': 'm', 'effort': 'medium', 'thread_id': thread_id}
+    first = queue.add(body)
+    second = queue.add({**body, 'title': 'later', 'prompt': 'Next work'})
+    with store.connect() as con:
+        con.execute("""UPDATE night_queue_items SET status='needs_attention',turn_id='failed-turn',
+            started_at=?,message='原对话出现新的轮次或无法核对中断轮次，请人工核查'
+            WHERE id=?""", (datetime.now(timezone.utc).isoformat(), first))
+    state.update(turn_id='newer-turn', turn_status='inProgress')
+    queue.update_config({'enabled': True})
+    queue.tick()
+    assert queue.items()[0]['status'] == 'needs_attention'
+    assert calls == []
+    state['turn_status'] = 'completed'
+    queue.tick()
+    queue.active.join(2)
+    assert queue.items()[0]['status'] == 'failed'
+    assert queue.items()[1]['status'] == 'completed'
+    assert calls == [second]
+
+
+def test_uncertain_followup_delivery_keeps_later_same_thread_item_blocked(fixture_store, tmp_path, monkeypatch):
+    import analyzer.night_queue as module
+    store, _ = fixture_store
+    thread_id = '11111111-1111-1111-1111-111111111111'
+    state = {'id': thread_id, 'cwd': str(tmp_path), 'turn_id': 'newer-turn',
+             'turn_status': 'completed', 'archived': False, 'parent_id': None}
+    runner = FakeRunner()
+    monkeypatch.setattr(module, 'read_thread_snapshot',
+                        lambda *_args, **_kwargs: {**state, 'user_prompt': 'different prompt'})
+    queue = NightQueue(store, runner, lambda: [
+        {'id': 'm', 'efforts': ['medium'], 'default_effort': 'medium'}],
+        lambda _: state)
+    store.refresh_quota = lambda: quota()
+    body = {'title': 'followup', 'prompt': 'Do work', 'cwd': str(tmp_path),
+            'model': 'm', 'effort': 'medium', 'thread_id': thread_id}
+    first = queue.add(body)
+    queue.add({**body, 'title': 'later', 'prompt': 'Next work'})
+    with store.connect() as con:
+        con.execute("""UPDATE night_queue_items SET status='needs_attention',bridge_signal_sent=1,
+            message='桌面派发结果不确定；请核对原对话，避免重复发送' WHERE id=?""", (first,))
+    queue.update_config({'enabled': True})
+    queue.tick()
+    assert queue.items()[0]['status'] == 'needs_attention'
+    assert queue.items()[1]['status'] == 'pending'
+    assert runner.calls == []
+
+
 def test_deferred_followup_preserves_order_within_target_thread(fixture_store, tmp_path):
     store, _ = fixture_store
     runner = FakeRunner()
@@ -215,7 +280,8 @@ def test_deferred_followup_preserves_order_within_target_thread(fixture_store, t
     assert runner.calls == [(independent, 'm', 'medium')]
 
 
-def test_manual_retry_requires_unchanged_followup_target(fixture_store, tmp_path):
+def test_manual_retry_rebases_after_unrelated_turn_but_rejects_duplicate_prompt(fixture_store, tmp_path, monkeypatch):
+    import analyzer.night_queue as module
     store, _ = fixture_store
     thread_id = '11111111-1111-1111-1111-111111111111'
     snapshot = {'id': thread_id, 'cwd': str(tmp_path), 'turn_id': 'original-turn',
@@ -226,13 +292,15 @@ def test_manual_retry_requires_unchanged_followup_target(fixture_store, tmp_path
                      'model': 'm', 'effort': 'medium', 'thread_id': thread_id})
     with store.connect() as con:
         con.execute("UPDATE night_queue_items SET status='needs_attention' WHERE id=?", (key,))
-    queue.thread_provider = lambda _: {**snapshot, 'turn_id': 'new-turn'}
+    latest = {**snapshot, 'turn_id': 'new-turn', 'user_prompt': 'Do work'}
+    monkeypatch.setattr(module, 'read_thread_snapshot', lambda *_args, **_kwargs: latest)
     with pytest.raises(ValueError, match='避免重复发送'):
         queue.retry(key)
     assert queue.items()[0]['status'] == 'needs_attention'
-    queue.thread_provider = lambda _: snapshot
+    latest['user_prompt'] = 'Different work'
     queue.retry(key)
     assert queue.items()[0]['status'] == 'pending'
+    assert queue.items()[0]['anchor_turn_id'] == 'new-turn'
 
 
 def test_edit_can_convert_locked_followup_to_new_thread(fixture_store, tmp_path):
@@ -810,19 +878,20 @@ def test_auto_discovery_is_idempotent_and_deleted_turn_stays_ignored(fixture_sto
     assert restarted.items()[0]['turn_id'] == 'new-failed-turn'
 
 
-def test_discovery_failure_blocks_new_dispatch_and_reports_error(fixture_store, tmp_path):
+def test_discovery_failure_does_not_block_queued_dispatch(fixture_store, tmp_path):
     store, _ = fixture_store
     runner = FakeRunner()
     def broken(**_): raise RuntimeError('app-server unavailable')
-    queue = NightQueue(store, runner, lambda: [], discovery_provider=broken)
+    queue = NightQueue(store, runner, lambda: [
+        {'id': 'm', 'efforts': ['medium'], 'default_effort': 'medium'}], discovery_provider=broken)
     queue.add({'title': 'New', 'prompt': 'work', 'cwd': str(tmp_path),
                'model': 'm', 'effort': 'medium'})
     queue.update_config({'enabled': True})
     store.refresh_quota = lambda: quota()
     queue.tick()
-    assert not runner.calls
-    assert queue.items()[0]['status'] == 'pending'
-    assert '自动发现失败' in queue.snapshot()['discovery']['error']
+    queue.active.join(2)
+    assert len(runner.calls) == 1
+    assert queue.items()[0]['status'] == 'completed'
 
 
 def test_old_reserve_and_auto_close_config_is_removed_on_restart(fixture_store, tmp_path):
@@ -836,7 +905,8 @@ def test_old_reserve_and_auto_close_config_is_removed_on_restart(fixture_store, 
                      '"five_hour_reserve":15,"weekly_reserve":5,'
                      '"default_model":"m","default_effort":"medium"}',))
     recovered = NightQueue(store, runner, models)
-    assert recovered.config() == {'enabled': True, 'default_model': 'm', 'default_effort': 'medium'}
+    assert recovered.config() == {'enabled': True, 'default_model': 'm', 'default_effort': 'medium',
+                                  'bridge_dispatcher_thread_id': '', 'quota_wake_enabled': True}
     recovered.add({'title': 'A', 'prompt': 'work', 'cwd': str(tmp_path), 'model': 'm', 'effort': 'medium'})
     store.refresh_quota = lambda: quota(99.9, 99.9)
     recovered.tick(); recovered.active.join(2)
@@ -906,10 +976,12 @@ def test_exhausted_task_waits_even_when_reset_time_is_unknown(fixture_store, tmp
     store.refresh_quota = lambda: answers.pop(0) if answers else quota(100)
     queue.tick(); queue.active.join(2)
     assert queue.items()[0]['status'] == 'waiting_quota'
-    assert queue.items()[0]['resume_after'] is None
+    assert time.time() < queue.items()[0]['resume_after'] <= time.time() + 300
     queue.tick()
     assert runner.calls == 1
     store.refresh_quota = lambda: quota()
+    with store.connect() as con:
+        con.execute('UPDATE night_queue_items SET resume_after=?', (time.time() - 1,))
     queue.tick(); queue.active.join(2)
     assert runner.calls == 2
 
