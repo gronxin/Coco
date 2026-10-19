@@ -79,8 +79,8 @@ private struct OverlaySupportTests {
         let navigation = CGRect(x: 106, y: 154, width: 36, height: 36)
         assertPoint(
             defaultOverlayOrigin(navigationFrame: navigation),
-            CGPoint(x: 150, y: 154),
-            "default overlay sits beside the navigation button"
+            CGPoint(x: 150, y: 250),
+            "default overlay sits beside and above the navigation button"
         )
         assertPoint(
             navigationOrigin(window: window, buttonSize: CGSize(width: 36, height: 36)),
