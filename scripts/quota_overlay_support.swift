@@ -7,6 +7,7 @@ private let hiddenQueueStatuses: Set<String> = [
     "dispatched",
     "watching",
 ]
+private let defaultOverlayLift: CGFloat = 96
 
 enum OverlayHitTarget: Equatable {
     case queueToggle
@@ -42,9 +43,12 @@ func appKitWindowFrame(cgFrame: CGRect, referenceMaxY: CGFloat) -> CGRect {
     )
 }
 
-/// Calculates the default overlay origin beside the visible navigation button.
+/// Calculates the lifted default overlay origin beside the visible navigation button.
 func defaultOverlayOrigin(navigationFrame: CGRect) -> CGPoint {
-    CGPoint(x: navigationFrame.maxX + 8, y: navigationFrame.minY)
+    CGPoint(
+        x: navigationFrame.maxX + 8,
+        y: navigationFrame.minY + defaultOverlayLift
+    )
 }
 
 /// Calculates the navigation button origin above the account area in the Codex rail.
