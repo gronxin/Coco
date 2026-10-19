@@ -543,8 +543,10 @@ class TkOverlayView:
         self.navigation_canvas.pack(fill="both", expand=True)
         self.panel_canvas.pack(fill="both", expand=True)
         self.root.update_idletasks()
-        self.navigation_hwnd = int(self.navigation_window.winfo_id())
-        self.panel_hwnd = int(self.panel_window.winfo_id())
+        navigation_client = int(self.navigation_window.winfo_id())
+        panel_client = int(self.panel_window.winfo_id())
+        self.navigation_hwnd = self._win32.root_window(navigation_client)
+        self.panel_hwnd = self._win32.root_window(panel_client)
         self._win32.configure_overlay_window(self.navigation_hwnd)
         self._win32.configure_overlay_window(self.panel_hwnd)
 
@@ -899,7 +901,15 @@ def _argument_parser():
     return parser
 
 
-def main(argv=None, environ=None):
+def start_lifecycle_with_handoff(lifecycle, install_lock_handoff):
+    """Persist runtime identity before releasing an ordinary launcher lock."""
+    started = lifecycle.start()
+    if install_lock_handoff is not None:
+        install_lock_handoff()
+    return started
+
+
+def main(argv=None, environ=None, install_lock_handoff=None):
     """Compose adapters, enforce ready ordering, and run the Windows UI."""
     environment = os.environ if environ is None else environ
     arguments = _argument_parser().parse_args(argv)
@@ -913,7 +923,11 @@ def main(argv=None, environ=None):
         nonce=arguments.nonce,
         pid=os.getpid(),
     )
-    if not lifecycle.start():
+    lifecycle_started = start_lifecycle_with_handoff(
+        lifecycle,
+        install_lock_handoff,
+    )
+    if not lifecycle_started:
         return 0
 
     view = None
@@ -960,4 +974,10 @@ def main(argv=None, environ=None):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(
+        main(
+            install_lock_handoff=globals().get(
+                "_COCO_INSTALL_LOCK_HANDOFF"
+            )
+        )
+    )

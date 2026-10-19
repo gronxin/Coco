@@ -10,6 +10,7 @@ import pytest
 from scripts.windows_overlay import (
     InstallLockError,
     Installer,
+    InstallerError,
     LocalFiles,
     Processes,
     Registry,
@@ -54,6 +55,8 @@ class FakeProcessHandle:
         self.alive = True
         self.closed = False
         self.waits = []
+        self.termination_succeeds = True
+        self.termination_waits = []
 
     def is_alive(self):
         """Return the configured liveness state."""
@@ -63,6 +66,14 @@ class FakeProcessHandle:
         """Record a bounded wait and return whether the process exited."""
         self.waits.append(timeout)
         return not self.alive
+
+    def terminate_known_child(self, timeout):
+        """Force-stop a known candidate when configured to permit termination."""
+        self.termination_waits.append(timeout)
+        if self.termination_succeeds:
+            self.alive = False
+            return True
+        return False
 
     def close(self):
         """Record handle closure without changing process liveness."""
@@ -153,6 +164,7 @@ class FakeProcesses:
         self.kill_candidate_during_grace = False
         self.fail_start = False
         self.stop_wait_succeeds = True
+        self.candidate_termination_succeeds = True
 
     @property
     def overlay_root(self):
@@ -203,6 +215,7 @@ class FakeProcesses:
             50_000 + self.next_pid,
             self.pythonw,
         )
+        handle.termination_succeeds = self.candidate_termination_succeeds
         self.handles[handle.pid] = handle
         start = {
             "pid": handle.pid,
@@ -438,6 +451,8 @@ def run_launcher_harness(tmp_path, pointer, args=None, lock_available=True):
         "import windows_overlay_support\n"
         "import windows_overlay_worker\n"
         "import windows_overlay_win32\n"
+        "handoff = globals().get('_COCO_INSTALL_LOCK_HANDOFF')\n"
+        "if handoff is not None: handoff()\n"
         "pathlib.Path(os.environ['LAUNCHER_PROBE']).write_text(json.dumps({\n"
         "  'cwd': os.getcwd(), 'argv': sys.argv, 'path0': sys.path[0],\n"
         "  'modules': [__file__, windows_overlay_support.__file__,\n"
@@ -449,9 +464,12 @@ def run_launcher_harness(tmp_path, pointer, args=None, lock_available=True):
         "ns = runpy.run_path(os.environ['LAUNCHER'], run_name='launcher_test')\n"
         "old_argv, old_path, old_cwd = list(sys.argv), list(sys.path), os.getcwd()\n"
         "calls = []\n"
+        "class Lease:\n"
+        "    def __bool__(self): return True\n"
+        "    def close(self): calls.append('released')\n"
         "def checker():\n"
         "    calls.append('checked')\n"
-        "    return os.environ['LOCK_AVAILABLE'] == '1'\n"
+        "    return Lease() if os.environ['LOCK_AVAILABLE'] == '1' else None\n"
         "error = None\n"
         "try:\n"
         "    launched = ns['launch'](pathlib.Path(os.environ['INSTALL_ROOT']), "
@@ -546,6 +564,11 @@ def test_launcher_blocks_ordinary_start_but_nonce_bypasses_only_lock(tmp_path):
         args=["--nonce", "b" * 32],
         lock_available=False,
     )
+    ordinary, ordinary_runtime, _root, _selected = run_launcher_harness(
+        tmp_path / "ordinary",
+        pointer,
+        lock_available=True,
+    )
 
     assert blocked["launched"] is False
     assert blocked["calls"] == ["checked"]
@@ -553,6 +576,9 @@ def test_launcher_blocks_ordinary_start_but_nonce_bypasses_only_lock(tmp_path):
     assert bypassed["launched"] is True
     assert bypassed["calls"] == []
     assert bypass_runtime is not None
+    assert ordinary["launched"] is True
+    assert ordinary["calls"] == ["checked", "released"]
+    assert ordinary_runtime is not None
 
 
 @pytest.mark.parametrize(
@@ -768,6 +794,56 @@ def test_candidate_must_remain_alive_for_500ms_after_ready(tmp_path):
     }
     assert processes.starts[-1]["rollback"] is True
     assert processes.starts[-1]["handle"].alive is True
+
+
+def test_candidate_stop_timeout_terminates_known_child_before_rollback(tmp_path):
+    """Force-stop only the spawned candidate before removing first-install state."""
+    source = write_source(tmp_path / "source", "new")
+    root = tmp_path / "app"
+    processes = FakeProcesses(root)
+    processes.stop_wait_succeeds = False
+    installer, registry, processes = make_installer(
+        root,
+        source,
+        processes=processes,
+        fault=FailureAt("candidate-started"),
+    )
+
+    with pytest.raises(RuntimeError, match="candidate-started"):
+        installer.install()
+
+    candidate = processes.starts[-1]["handle"]
+    assert candidate.alive is False
+    assert candidate.termination_waits == [5.0]
+    assert registry.value is None
+    assert not (root / "overlay" / "current.json").exists()
+    assert processes.events[-1] == "stop-reset"
+
+
+def test_failed_candidate_termination_does_not_restore_static_state(tmp_path):
+    """Keep new static state and a signaled stop event when a child cannot stop."""
+    source = write_source(tmp_path / "source", "new")
+    root = tmp_path / "app"
+    processes = FakeProcesses(root)
+    processes.stop_wait_succeeds = False
+    processes.candidate_termination_succeeds = False
+    installer, registry, processes = make_installer(
+        root,
+        source,
+        processes=processes,
+        fault=FailureAt("candidate-started"),
+    )
+
+    with pytest.raises(InstallerError, match="rollback failed"):
+        installer.install()
+
+    candidate = processes.starts[-1]["handle"]
+    assert candidate.alive is True
+    assert candidate.termination_waits == [5.0]
+    assert registry.value is not None
+    assert (root / "overlay" / "current.json").exists()
+    assert (root / "overlay" / "instance.json").exists()
+    assert processes.events[-1] == "stop-set"
 
 
 def test_old_stop_timeout_restores_staged_version_and_static_state(tmp_path):
@@ -1139,6 +1215,7 @@ def test_rollback_process_start_removes_failure_injection_environment(
     )
 
     environment = RecordingPopen.calls[-1][1]["env"]
-    assert result is handle
+    assert result.pid == handle.pid
     assert "COCO_OVERLAY_TEST_MODE" not in environment
     assert "COCO_OVERLAY_FAIL_BEFORE_READY" not in environment
+    result.close()

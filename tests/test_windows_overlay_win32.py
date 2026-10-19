@@ -36,6 +36,7 @@ class FakeNative:
         self.process_creation_time = 123456789
         self.process_path = r"C:\Python311\pythonw.exe"
         self.dpi_awareness_result = True
+        self.root_window = 1001
         self.closed = []
         self.calls = []
 
@@ -92,6 +93,11 @@ class FakeNative:
         """Record process DPI-awareness activation."""
         self.calls.append(("set_process_dpi_awareness",))
         return self.dpi_awareness_result
+
+    def get_root_window(self, hwnd):
+        """Return the configured root wrapper HWND."""
+        self.calls.append(("get_root_window", hwnd))
+        return self.root_window
 
     def get_window_ex_style(self, hwnd):
         """Return the configured extended window style."""
@@ -283,6 +289,16 @@ def test_nonactivating_styles_are_ored_without_mouse_transparency():
     assert actual == original | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
     assert actual & WS_EX_TRANSPARENT == 0
     assert native.calls[-1] == ("set_window_ex_style", 501, actual)
+
+
+def test_tk_client_handle_resolves_to_root_wrapper_window():
+    """Apply top-level behavior to the wrapper HWND rather than Tk's child HWND."""
+    native = FakeNative()
+
+    actual = Win32Api(native).root_window(501)
+
+    assert actual == 1001
+    assert ("get_root_window", 501) in native.calls
 
 
 def test_show_and_place_never_activate_the_overlay():
