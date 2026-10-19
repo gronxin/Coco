@@ -333,6 +333,15 @@ def test_parse_quota_rejects_oversized_limit_collection():
         parse_quota_payload(payload, now=1_700_000_000)
 
 
+def test_parse_quota_rejects_integer_too_large_for_float_conversion():
+    """Treat an extreme JSON integer as malformed instead of leaking OverflowError."""
+    payload = quota_payload()
+    payload["limits"][1]["primary"]["usedPercent"] = int("9" * 309)
+
+    with pytest.raises(ValueError):
+        parse_quota_payload(payload, now=1_700_000_000)
+
+
 def test_parse_queue_filters_status_sorts_counts_and_limits_titles():
     """Summarize actionable queue rows before limiting display titles."""
     long_title = "长" * 205
@@ -496,6 +505,30 @@ def test_load_state_requires_coordinates_for_custom_position(tmp_path):
     )
 
     assert load_state(path) == OverlayState()
+
+
+def test_extreme_json_integer_falls_back_and_cannot_be_saved(tmp_path):
+    """Keep load and save within their documented corrupt-state behavior."""
+    path = tmp_path / "overlay-state.json"
+    huge = int("9" * 309)
+    payload = {
+        "overlay_visible": False,
+        "queue_collapsed": False,
+        "custom_position": True,
+        "relative_x": huge,
+        "relative_bottom": 1,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_state(path) == OverlayState()
+    assert save_state(
+        path,
+        OverlayState(
+            custom_position=True,
+            relative_x=huge,
+            relative_bottom=1,
+        ),
+    ) is False
 
 
 def test_load_state_rejects_files_larger_than_sixteen_kibibytes(tmp_path):
