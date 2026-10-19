@@ -66,6 +66,52 @@ class LiveInstance:
     handle: object
 
 
+class StartedProcess:
+    """Pair a spawned child with its verified synchronization handle."""
+
+    def __init__(self, child, identity):
+        """Store the exact child process and verified kernel identity."""
+        self._child = child
+        self._identity = identity
+
+    @property
+    def pid(self):
+        """Return the verified child process identifier."""
+        return self._identity.pid
+
+    @property
+    def creation_time(self):
+        """Return the verified child creation timestamp."""
+        return self._identity.creation_time
+
+    @property
+    def executable_path(self):
+        """Return the verified child executable path."""
+        return self._identity.executable_path
+
+    def is_alive(self):
+        """Return whether the verified child is still running."""
+        return self._identity.is_alive()
+
+    def wait(self, timeout):
+        """Wait for the verified child to exit."""
+        return self._identity.wait(timeout)
+
+    def terminate_known_child(self, timeout):
+        """Force-stop only this directly spawned and identity-verified child."""
+        try:
+            if self._child.poll() is None:
+                self._child.terminate()
+            self._child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False
+        return self._identity.wait(0)
+
+    def close(self):
+        """Close the verified kernel identity handle."""
+        self._identity.close()
+
+
 class LocalFiles:
     """Provide injectable local filesystem operations."""
 
@@ -260,7 +306,8 @@ class Processes:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         try:
-            return self.open_process(process.pid)
+            identity = self.open_process(process.pid)
+            return StartedProcess(process, identity)
         except BaseException:
             try:
                 if process.poll() is None:
@@ -699,13 +746,23 @@ class Installer:
                 if candidate.is_alive():
                     stop_event.set()
                     if not candidate.wait(STOP_TIMEOUT):
-                        candidate_stopped = False
-                        errors.append("candidate did not stop during rollback")
+                        terminate = getattr(
+                            candidate,
+                            "terminate_known_child",
+                            None,
+                        )
+                        if terminate is None or not terminate(STOP_TIMEOUT):
+                            candidate_stopped = False
+                            errors.append(
+                                "candidate did not stop during rollback"
+                            )
                 if candidate_stopped:
                     self._remove_candidate_instance(candidate, version, nonce)
             except BaseException as exc:
                 candidate_stopped = False
                 errors.append(str(exc))
+        if not candidate_stopped:
+            raise InstallerError("; ".join(errors))
         if old_live is not None and old_live.handle.is_alive():
             try:
                 stop_event.set()

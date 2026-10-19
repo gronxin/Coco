@@ -6,6 +6,7 @@ from pathlib import PureWindowsPath
 
 
 ERROR_ALREADY_EXISTS = 183
+GA_ROOT = 2
 GWL_EXSTYLE = -20
 HWND_TOPMOST = -1
 INFINITE = 0xFFFFFFFF
@@ -179,6 +180,13 @@ class Win32Api:
             raise OSError("无法启用 Windows Per-Monitor DPI awareness")
         return True
 
+    def root_window(self, hwnd):
+        """Resolve a Tk client HWND to its top-level wrapper window."""
+        root = self._native.get_root_window(hwnd)
+        if not root:
+            raise OSError("无法解析 Windows 顶层浮窗句柄")
+        return root
+
     def foreground_codex_window(self):
         """Return the valid foreground Codex target or None."""
         try:
@@ -290,6 +298,8 @@ class _CtypesNative:
         ctypes = self.ctypes
         wintypes = self.wintypes
         self.user32.GetForegroundWindow.restype = wintypes.HWND
+        self.user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        self.user32.GetAncestor.restype = wintypes.HWND
         self.user32.GetWindowThreadProcessId.argtypes = [
             wintypes.HWND,
             ctypes.POINTER(wintypes.DWORD),
@@ -449,6 +459,10 @@ class _CtypesNative:
     def get_foreground_window(self):
         """Return the foreground window handle."""
         return self.user32.GetForegroundWindow()
+
+    def get_root_window(self, hwnd):
+        """Return the root wrapper HWND for one Tk client window."""
+        return self.user32.GetAncestor(hwnd, GA_ROOT)
 
     def is_window_visible(self, hwnd):
         """Return whether a window is visible."""

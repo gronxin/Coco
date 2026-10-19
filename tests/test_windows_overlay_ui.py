@@ -39,6 +39,11 @@ class FakeWin32:
         """Record applying non-activating styles to one overlay window."""
         self.calls.append(("configure_overlay_window", hwnd))
 
+    def root_window(self, hwnd):
+        """Resolve a fake Tk client HWND to its top-level wrapper."""
+        self.calls.append(("root_window", hwnd))
+        return hwnd + 10_000
+
     def place_no_activate(self, hwnd, rect):
         """Record non-activating physical placement."""
         self.calls.append(("place_no_activate", hwnd, tuple(rect)))
@@ -711,6 +716,11 @@ def test_lazy_view_creates_two_hidden_toplevels_and_styles_both(monkeypatch):
 
     assert len(FakeTkToplevel.instances) == 2
     assert all(("withdraw",) in item.calls for item in FakeTkToplevel.instances)
+    client_hwnds = [item.hwnd for item in FakeTkToplevel.instances]
+    assert ("root_window", client_hwnds[0]) in win32.calls
+    assert ("root_window", client_hwnds[1]) in win32.calls
+    assert view.navigation_hwnd == client_hwnds[0] + 10_000
+    assert view.panel_hwnd == client_hwnds[1] + 10_000
     assert ("configure_overlay_window", view.navigation_hwnd) in win32.calls
     assert ("configure_overlay_window", view.panel_hwnd) in win32.calls
 
@@ -738,6 +748,20 @@ class OrderedReadyLifecycle:
     def write_ready(self):
         """Record publishing candidate ready metadata."""
         self.events.append("lifecycle.ready")
+
+
+class OrderedStartLifecycle:
+    """Record durable instance startup for install-lock handoff tests."""
+
+    def __init__(self, events, started=True):
+        """Store shared events and the configured singleton result."""
+        self.events = events
+        self.started = started
+
+    def start(self):
+        """Record instance persistence before returning startup state."""
+        self.events.append("lifecycle.start")
+        return self.started
 
 
 class OrderedIdleView:
@@ -771,6 +795,20 @@ def test_ready_is_written_only_after_worker_controller_and_idle_cycle():
         "view.idle",
         "lifecycle.ready",
     ]
+
+
+def test_install_lock_handoff_follows_durable_instance_start():
+    """Release the launcher lock only after lifecycle identity is established."""
+    events = []
+    lifecycle = OrderedStartLifecycle(events)
+
+    started = overlay.start_lifecycle_with_handoff(
+        lifecycle,
+        lambda: events.append("install-lock.release"),
+    )
+
+    assert started is True
+    assert events == ["lifecycle.start", "install-lock.release"]
 
 
 @pytest.mark.parametrize(
