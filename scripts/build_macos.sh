@@ -40,6 +40,14 @@ if [ "$UNIVERSAL" = 1 ]; then
   ARCH_FLAGS=(-arch arm64 -arch x86_64)
 fi
 
+# Deployment target must match Info.plist's LSMinimumSystemVersion, otherwise a
+# newer default toolchain stamps a higher minimum and older macOS fails to launch.
+DEPLOY_TARGET="12.0"
+MACHO_TARGETS=(-target "arm64-apple-macos${DEPLOY_TARGET}")
+if [ "$UNIVERSAL" = 1 ]; then
+  MACHO_TARGETS=(-target "arm64-apple-macos${DEPLOY_TARGET}" -target "x86_64-apple-macos${DEPLOY_TARGET}")
+fi
+
 SWIFT_CACHE="/private/tmp/codex-quota-build"
 
 echo "==> 1/7 前端构建"
@@ -50,17 +58,22 @@ else
 fi
 
 echo "==> 2/7 后端打包 (PyInstaller)"
+if [ "$UNIVERSAL" = 1 ]; then
+  echo "    警告：--universal 仅对 Swift 二进制生效；后端仍为当前 Python 架构（$(uname -m)）。如需 Intel 后端，请改用 universal2 Python 构建。" >&2
+fi
 .venv/bin/pyinstaller --distpath "$BUILD/dist" --workpath "$BUILD/work" --noconfirm \
   scripts/codex_token_analyzer.spec
 
 echo "==> 3/7 编译额度浮窗"
 mkdir -p "$BUILD"
-swiftc ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} -module-cache-path "$SWIFT_CACHE" -O \
+swiftc ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} ${MACHO_TARGETS[@]+"${MACHO_TARGETS[@]}"} \
+  -module-cache-path "$SWIFT_CACHE" -O \
   -o "$BUILD/codex-quota-overlay" \
   scripts/quota_overlay_support.swift scripts/quota_overlay.swift
 
 echo "==> 4/7 编译菜单栏 App"
-swiftc ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} -module-cache-path "$SWIFT_CACHE" -O -framework AppKit \
+swiftc ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} ${MACHO_TARGETS[@]+"${MACHO_TARGETS[@]}"} \
+  -module-cache-path "$SWIFT_CACHE" -O -framework AppKit \
   -o "$BUILD/Coco" scripts/macos_app_support.swift scripts/macos_app.swift
 
 echo "==> 5/7 组装 .app bundle"
@@ -98,8 +111,17 @@ if [ "$UNSIGNED" = 1 ]; then
   codesign --force --deep --sign - "$APP" 2>/dev/null || echo "    ad-hoc 签名不可用，保持未签名"
 else
   : "${COCO_SIGN_IDENTITY:?签名模式需要设置 COCO_SIGN_IDENTITY，或用 --unsigned}"
+  # Sign every nested Mach-O first (the PyInstaller backend ships 60+ .so/.dylib
+  # and a Python.framework, all delivered ad-hoc by PyInstaller). Notarization
+  # rejects ad-hoc nested code under hardened runtime, so re-sign each with a
+  # Developer ID + runtime + timestamp before signing the outer app.
   codesign --force --options runtime --timestamp --sign "$COCO_SIGN_IDENTITY" \
     "$APP/Contents/Resources/codex-quota-overlay"
+  find "$APP/Contents/Resources/backend" -type f \
+    \( -name '*.so' -o -name '*.dylib' -o -perm -111 \) -print0 \
+    | while IFS= read -r -d '' binary; do
+        codesign --force --options runtime --timestamp --sign "$COCO_SIGN_IDENTITY" "$binary"
+      done
   codesign --force --options runtime --timestamp --sign "$COCO_SIGN_IDENTITY" \
     "$APP/Contents/Resources/backend/CocoBackend"
   codesign --force --options runtime --timestamp \
