@@ -15,6 +15,7 @@ private var runtimeDataDir: URL {
         .appendingPathComponent("Library/Application Support/CodexTokenAnalyzer/data")
 }
 
+/// Run an executable. `arguments` excludes argv[0] (Process supplies it via executableURL).
 private func runProcess(_ executable: String, _ arguments: [String]) -> (Int32, String) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
@@ -40,15 +41,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var backendDirectory: String { "\(appBundlePath)/Contents/Resources/backend" }
     private var overlayBinary: String { bundledResourcePath(appBundlePath: appBundlePath, name: "codex-quota-overlay") }
 
+    private var servicePlistPath: String {
+        launchAgentsDir.appendingPathComponent("\(serviceLabel).plist").path
+    }
+
+    private var overlayPlistPath: String {
+        launchAgentsDir.appendingPathComponent("\(overlayLabel).plist").path
+    }
+
+    private var servicePlist: [String: Any]? {
+        NSDictionary(contentsOfFile: servicePlistPath) as? [String: Any]
+    }
+
     private var overlayInstalled: Bool {
-        FileManager.default.fileExists(atPath:
-            launchAgentsDir.appendingPathComponent("\(overlayLabel).plist").path)
+        FileManager.default.fileExists(atPath: overlayPlistPath)
     }
 
     private var launchAtLogin: Bool {
-        let path = launchAgentsDir.appendingPathComponent("\(serviceLabel).plist").path
-        guard let dict = NSDictionary(contentsOfFile: path) else { return false }
-        return (dict["RunAtLoad"] as? Bool) ?? false
+        (servicePlist?["RunAtLoad"] as? Bool) ?? false
+    }
+
+    /// Whether the installed LaunchAgent already points at our packaged runtime backend.
+    private var serviceCurrent: Bool {
+        let args = servicePlist?["ProgramArguments"] as? [String]
+        return serviceArgumentsCurrent(programArguments: args, runtimeBackend: backendExecutable)
     }
 
     private var backendRunning: Bool {
@@ -76,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.title = "Coco"
         rebuildMenu()
         bootstrapIfNeeded()
-        openPanel()
+        openPanelWhenReady()
         if welcomeNeeded(hasCodex: hasCodex, backendRunning: backendRunning) {
             showWelcome()
         }
@@ -86,33 +102,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// Ensure our packaged service is installed and current, migrating any legacy
+    /// source-install (the install path boots out the same Label safely).
     private func bootstrapIfNeeded() {
         guard FileManager.default.isExecutableFile(atPath: backendExecutable) else { return }
-        if !backendRunning {
-            _ = runProcess(backendExecutable,
-                           serviceArguments("install", backend: backendExecutable,
-                                            extra: ["--backend", backendDirectory]))
+        if !serviceCurrent {
+            _ = runBackend(serviceArguments("install", extra: ["--backend", backendDirectory]))
         }
     }
 
-    private func rebuildMenu() {
-        let menu = NSMenu()
-        menu.addItem(item("打开面板", #selector(openPanelAction)))
-        menu.addItem(item(overlayInstalled ? "隐藏额度浮窗" : "显示额度浮窗",
-                          #selector(toggleOverlayAction)))
-        menu.addItem(item("重启本机服务", #selector(restartServiceAction)))
-        menu.addItem(item("查看日志", #selector(openLogsAction)))
-        menu.addItem(item(launchAtLogin ? "开机自启 ✓" : "开机自启", #selector(toggleAutostartAction)))
-        menu.addItem(item("完全卸载", #selector(uninstallAction)))
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(item("退出", #selector(quitAction)))
-        statusItem.menu = menu
+    @discardableResult
+    private func runBackend(_ arguments: [String]) -> Int32 {
+        runProcess(backendExecutable, arguments).0
     }
 
-    private func item(_ title: String, _ selector: Selector) -> NSMenuItem {
-        let entry = NSMenuItem(title: title, action: selector, keyEquivalent: "")
-        entry.target = self
-        return entry
+    private func rebuildMenu() {
+        let titles = menuTitles(overlayInstalled: overlayInstalled, launchAtLogin: launchAtLogin)
+        let selectors: [Selector] = [
+            #selector(openPanelAction),
+            #selector(toggleOverlayAction),
+            #selector(restartServiceAction),
+            #selector(openLogsAction),
+            #selector(toggleAutostartAction),
+            #selector(uninstallAction),
+        ]
+        let menu = NSMenu()
+        for (title, sel) in zip(titles, selectors) {
+            let entry = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+            entry.target = self
+            menu.addItem(entry)
+        }
+        menu.addItem(NSMenuItem.separator())
+        let quit = NSMenuItem(title: "退出", action: #selector(quitAction), keyEquivalent: "")
+        quit.target = self
+        menu.addItem(quit)
+        statusItem.menu = menu
     }
 
     private func refresh() {
@@ -121,20 +145,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    @objc private func openPanelAction() { openPanel() }
+    @objc private func openPanelAction() { openPanelWhenReady() }
 
-    private func openPanel() {
-        NSWorkspace.shared.open(panelURL)
+    private func openPanelWhenReady() {
+        DispatchQueue.global().async {
+            for _ in 0..<15 {
+                if self.backendRunning { break }
+                Thread.sleep(forTimeInterval: 0.3)
+            }
+            DispatchQueue.main.async { NSWorkspace.shared.open(panelURL) }
+        }
     }
 
     @objc private func toggleOverlayAction() {
         DispatchQueue.global().async {
             if self.overlayInstalled {
-                _ = runProcess(self.backendExecutable, [self.backendExecutable, "overlay", "uninstall"])
+                self.runBackend(["overlay", "uninstall"])
             } else {
-                _ = runProcess(self.backendExecutable,
-                               overlayInstallArguments(backend: self.backendExecutable,
-                                                       binary: self.overlayBinary))
+                self.runBackend(overlayInstallArguments(binary: self.overlayBinary))
             }
             self.refresh()
         }
@@ -142,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func restartServiceAction() {
         DispatchQueue.global().async {
-            _ = runProcess(self.backendExecutable, serviceArguments("restart", backend: self.backendExecutable))
+            self.runBackend(serviceArguments("restart"))
             self.refresh()
         }
     }
@@ -154,8 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleAutostartAction() {
         let target = launchAtLogin ? "off" : "on"
         DispatchQueue.global().async {
-            _ = runProcess(self.backendExecutable,
-                           serviceArguments("autostart", backend: self.backendExecutable, extra: [target]))
+            self.runBackend(serviceArguments("autostart", extra: [target]))
             self.refresh()
         }
     }
@@ -172,10 +199,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if choice == .alertThirdButtonReturn { return }
         if choice == .alertSecondButtonReturn { purge = true }
         DispatchQueue.global().async {
-            _ = runProcess(self.backendExecutable, serviceArguments("uninstall", backend: self.backendExecutable))
-            _ = runProcess(self.backendExecutable, [self.backendExecutable, "overlay", "uninstall"])
+            self.runBackend(serviceArguments("uninstall"))
+            self.runBackend(["overlay", "uninstall"])
             if purge {
-                _ = runProcess(self.backendExecutable, serviceArguments("purge-data", backend: self.backendExecutable))
+                self.runBackend(serviceArguments("purge-data"))
             }
             self.refresh()
         }
