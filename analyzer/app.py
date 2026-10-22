@@ -28,8 +28,9 @@ from .activity import merge_work_steps, read_turn_activity
 from .store import Store
 from .night_queue import NightQueue
 from .prompt_history import PromptHistory, QUEUE_ATTACHMENT_MARKER
+from .paths import resource_root
 
-BASE = Path(__file__).resolve().parent.parent
+BASE = resource_root()
 
 
 def _queue_timestamp(value):
