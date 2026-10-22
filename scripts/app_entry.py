@@ -4,6 +4,7 @@ Serves the analyzer HTTP app, and forwards ``service`` / ``overlay`` subcommands
 the launchd management helpers so the menu bar app can drive them via one binary.
 """
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -16,7 +17,8 @@ import macos_overlay  # noqa: E402
 
 
 def serve() -> None:
-    uvicorn.run(create_app(), host="127.0.0.1", port=8765)
+    port = int(os.environ.get("TOKEN_ANALYZER_PORT", "8765"))
+    uvicorn.run(create_app(), host="127.0.0.1", port=port)
 
 
 def _dispatch_service(args) -> int:
