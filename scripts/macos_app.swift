@@ -15,6 +15,12 @@ private var runtimeDataDir: URL {
         .appendingPathComponent("Library/Application Support/CodexTokenAnalyzer/data")
 }
 
+private var runtimeBackendExecutable: String {
+    FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/CodexTokenAnalyzer/backend/CocoBackend")
+        .path
+}
+
 /// Run an executable. `arguments` excludes argv[0] (Process supplies it via executableURL).
 private func runProcess(_ executable: String, _ arguments: [String]) -> (Int32, String) {
     let process = Process()
@@ -64,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Whether the installed LaunchAgent already points at our packaged runtime backend.
     private var serviceCurrent: Bool {
         let args = servicePlist?["ProgramArguments"] as? [String]
-        return serviceArgumentsCurrent(programArguments: args, runtimeBackend: backendExecutable)
+        return serviceArgumentsCurrent(programArguments: args, runtimeBackend: runtimeBackendExecutable)
     }
 
     private var backendRunning: Bool {
