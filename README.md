@@ -22,6 +22,26 @@
 - Node.js 20 或更高版本。
 - 已在本机使用 Codex，默认数据目录为 `~/.codex`。
 
+## 下载安装（macOS）
+
+面向 macOS 的可双击安装包，无需自行准备 Python、Node 或 Xcode。
+
+1. 从 GitHub Releases 下载 `Coco.dmg`。
+2. 双击打开，把 `Coco` 拖进「应用程序」。
+3. 双击启动（已使用 Developer ID 签名并公证，无安全警告）。
+
+首次启动会：
+
+- 若未检测到 Codex，提示先安装并登录 Codex；
+- 把后端服务与额度浮窗注册为当前用户的 LaunchAgent（运行文件与数据库放在 `~/Library/Application Support/CodexTokenAnalyzer`）；
+- 自动用默认浏览器打开用量面板。
+
+菜单栏常驻 `Coco` 图标，可打开面板、显示/隐藏额度浮窗、重启本机服务、查看日志、开启/关闭开机自启。退出菜单栏应用后，后端服务与任务队列仍在后台运行。
+
+卸载：菜单栏选择「完全卸载」，会移除两个 LaunchAgent；本地数据默认保留，可再选择同时删除。
+
+> 打包产物由 `scripts/build_macos.sh` 生成。发布前用 `COCO_SIGN_IDENTITY` 与 `NOTARY_PROFILE` 走签名/公证；本地验证加 `--unsigned`。
+
 ## 安装与启动
 
 macOS / Linux：
