@@ -65,9 +65,20 @@ func defaultOverlayOrigin(navigationFrame: CGRect) -> CGPoint {
     )
 }
 
-/// Calculates the navigation button origin above the account area in the Codex rail.
+/// Calculates the navigation button origin inside the Codex rail.
+///
+/// Anchored well above the account/update area at the rail's bottom so the mini
+/// icon does not cover Codex's update button. Users can still drag it elsewhere.
 func navigationOrigin(window: CGRect, buttonSize: CGSize) -> CGPoint {
-    CGPoint(x: window.minX + 6, y: window.minY + 54)
+    CGPoint(x: window.minX + 6, y: window.minY + 160)
+}
+
+/// Restores a user-dragged navigation button origin relative to the target window.
+func customNavigationOrigin(window: CGRect, relativeOrigin: CGPoint) -> CGPoint {
+    CGPoint(
+        x: window.minX + relativeOrigin.x,
+        y: window.minY + relativeOrigin.y
+    )
 }
 
 /// Restores a user-selected overlay origin relative to the target window.

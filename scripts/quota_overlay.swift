@@ -13,6 +13,9 @@ private let queueCollapsedKey = "queueCollapsed"
 private let customPositionKey = "customPosition"
 private let panelRelativeXKey = "panelRelativeX"
 private let panelRelativeYKey = "panelRelativeY"
+private let navCustomPositionKey = "navCustomPosition"
+private let navRelativeXKey = "navRelativeX"
+private let navRelativeYKey = "navRelativeY"
 private let panelWidth: CGFloat = 260
 private let expandedPanelHeight: CGFloat = 270
 private let collapsedPanelHeight: CGFloat = 194
@@ -273,9 +276,45 @@ private final class QuotaView: NSView {
 private final class NavigationButtonView: NSView {
     var onToggle: (() -> Void)?
     var onQuit: (() -> Void)?
+    var onDragStarted: (() -> Void)?
+    var onDragEnded: ((CGPoint) -> Void)?
     var overlayVisible = false { didSet { needsDisplay = true } }
 
+    private var dragged = false
+    private var pointerDownScreenLocation: NSPoint?
+    private var dragWindowOrigin: NSPoint?
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
     override var isOpaque: Bool { false }
+
+    /// Captures the pointer and panel origins for thresholded drag detection.
+    override func mouseDown(with event: NSEvent) {
+        dragged = false
+        pointerDownScreenLocation = NSEvent.mouseLocation
+        dragWindowOrigin = window?.frame.origin
+    }
+
+    /// Moves the navigation button after the pointer exceeds the drag threshold.
+    override func mouseDragged(with event: NSEvent) {
+        guard let window,
+              let pointerDownScreenLocation,
+              let dragWindowOrigin else { return }
+        let currentLocation = NSEvent.mouseLocation
+        if !dragged {
+            guard exceedsDragThreshold(from: pointerDownScreenLocation, to: currentLocation) else {
+                return
+            }
+            dragged = true
+            onDragStarted?()
+        }
+        window.setFrameOrigin(
+            NSPoint(
+                x: dragWindowOrigin.x + currentLocation.x - pointerDownScreenLocation.x,
+                y: dragWindowOrigin.y + currentLocation.y - pointerDownScreenLocation.y
+            )
+        )
+    }
 
     /// Draws a compact quota-and-queue glyph aligned with the Codex navigation rail.
     override func draw(_ dirtyRect: NSRect) {
@@ -328,8 +367,19 @@ private final class NavigationButtonView: NSView {
         onQuit?()
     }
 
-    /// Toggles the overlay without activating this accessory application.
+    /// Completes a drag (persisting position) or toggles the overlay on click.
     override func mouseUp(with event: NSEvent) {
+        if dragged {
+            if let window {
+                onDragEnded?(window.frame.origin)
+            }
+            dragged = false
+            pointerDownScreenLocation = nil
+            dragWindowOrigin = nil
+            return
+        }
+        pointerDownScreenLocation = nil
+        dragWindowOrigin = nil
         onToggle?()
     }
 
@@ -356,6 +406,9 @@ private final class Overlay: NSObject, NSApplicationDelegate {
     private var queueCollapsed = overlayDefaults.bool(forKey: queueCollapsedKey)
     private var customPosition = overlayDefaults.bool(forKey: customPositionKey)
     private var relativeOrigin: CGPoint?
+    private var navCustomPosition = overlayDefaults.bool(forKey: navCustomPositionKey)
+    private var navRelativeOrigin: CGPoint?
+    private var isDraggingNavigation = false
     private var trackingTimer: Timer?
     private var dataTimer: Timer?
     private var currentTargetWindow: CGRect?
@@ -372,6 +425,13 @@ private final class Overlay: NSObject, NSApplicationDelegate {
             relativeOrigin = CGPoint(
                 x: overlayDefaults.double(forKey: panelRelativeXKey),
                 y: overlayDefaults.double(forKey: panelRelativeYKey)
+            )
+        }
+        if overlayDefaults.object(forKey: navRelativeXKey) != nil,
+           overlayDefaults.object(forKey: navRelativeYKey) != nil {
+            navRelativeOrigin = CGPoint(
+                x: overlayDefaults.double(forKey: navRelativeXKey),
+                y: overlayDefaults.double(forKey: navRelativeYKey)
             )
         }
         super.init()
@@ -396,6 +456,12 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         }
         navigationContent.onQuit = { [weak self] in
             self?.quitOverlay()
+        }
+        navigationContent.onDragStarted = { [weak self] in
+            self?.isDraggingNavigation = true
+        }
+        navigationContent.onDragEnded = { [weak self] origin in
+            self?.finishDraggingNavigation(at: origin)
         }
         content.onToggleQueue = { [weak self] in
             self?.toggleQueueCollapsed()
@@ -525,7 +591,9 @@ private final class Overlay: NSObject, NSApplicationDelegate {
             return
         }
         currentTargetWindow = target
-        positionNavigationButton(for: target, on: screen)
+        if !isDraggingNavigation {
+            positionNavigationButton(for: target, on: screen)
+        }
         if navigationPanel.isVisible == false {
             navigationPanel.orderFrontRegardless()
         }
@@ -591,13 +659,36 @@ private final class Overlay: NSObject, NSApplicationDelegate {
 
     /// Places the 36-point control inside the Codex navigation rail and screen bounds.
     private func positionNavigationButton(for target: CGRect, on screen: NSScreen) {
-        let requested = navigationOrigin(window: target, buttonSize: navigationButtonSize)
+        let requested: CGPoint
+        if navCustomPosition, let navRelativeOrigin {
+            requested = customNavigationOrigin(window: target, relativeOrigin: navRelativeOrigin)
+        } else {
+            requested = navigationOrigin(window: target, buttonSize: navigationButtonSize)
+        }
         let origin = clampedOrigin(
             requested,
             size: navigationButtonSize,
             visibleFrame: screen.visibleFrame
         )
         navigationPanel.setFrameOrigin(origin)
+    }
+
+    /// Persists a completed navigation-button drag as a target-window-relative position.
+    private func finishDraggingNavigation(at origin: CGPoint) {
+        defer { isDraggingNavigation = false }
+        guard let target = currentTargetWindow,
+              let screen = targetScreen(for: target) else {
+            return
+        }
+        let clamped = clampedOrigin(origin, size: navigationButtonSize,
+                                    visibleFrame: screen.visibleFrame)
+        navigationPanel.setFrameOrigin(clamped)
+        navCustomPosition = true
+        overlayDefaults.set(true, forKey: navCustomPositionKey)
+        let relative = CGPoint(x: clamped.x - target.minX, y: clamped.y - target.minY)
+        navRelativeOrigin = relative
+        overlayDefaults.set(Double(relative.x), forKey: navRelativeXKey)
+        overlayDefaults.set(Double(relative.y), forKey: navRelativeYKey)
     }
 
     /// Places the overlay beside the navigation button or at its persisted custom origin.

@@ -118,8 +118,13 @@ private struct OverlaySupportTests {
         )
         assertPoint(
             navigationOrigin(window: window, buttonSize: CGSize(width: 36, height: 36)),
-            CGPoint(x: 106, y: 154),
-            "navigation origin"
+            CGPoint(x: 106, y: 260),
+            "navigation origin is lifted above the update button"
+        )
+        assertPoint(
+            customNavigationOrigin(window: window, relativeOrigin: CGPoint(x: 40, y: 220)),
+            CGPoint(x: 140, y: 320),
+            "custom navigation origin"
         )
         assertPoint(
             customOverlayOrigin(window: window, relativeOrigin: CGPoint(x: 500, y: 200)),
