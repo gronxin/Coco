@@ -135,6 +135,10 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "Coco Codex管家" -srcfolder "$STAGE" -ov -format UDZO "$BUILD/$DMG_NAME" >/dev/null
+if [ "$UNSIGNED" = 0 ]; then
+  # Sign the DMG itself so Gatekeeper has a usable signature on the downloaded image.
+  codesign --force --timestamp --sign "$COCO_SIGN_IDENTITY" "$BUILD/$DMG_NAME"
+fi
 
 if [ "$UNSIGNED" = 0 ] && [ -n "${NOTARY_PROFILE:-}" ]; then
   echo "==> 公证"
