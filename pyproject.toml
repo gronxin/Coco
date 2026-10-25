@@ -17,7 +17,7 @@ Repository = "https://github.com/gronxin/codex-token-analyzer"
 Issues = "https://github.com/gronxin/codex-token-analyzer/issues"
 
 [project.optional-dependencies]
-dev = ["pytest==8.4.2"]
+dev = ["pytest==9.1.1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
