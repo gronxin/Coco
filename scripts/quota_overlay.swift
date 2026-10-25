@@ -507,7 +507,7 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Returns the frontmost valid, on-screen layer-zero window owned by Codex.
+    /// Returns the largest valid, on-screen layer-zero window owned by Codex.
     private func targetCodexWindow() -> CGRect? {
         guard let app = NSWorkspace.shared.frontmostApplication,
               app.bundleIdentifier == codexBundleID,
@@ -518,6 +518,7 @@ private final class Overlay: NSObject, NSApplicationDelegate {
               ) as? [[String: Any]] else {
             return nil
         }
+        var candidates: [CGRect] = []
         for item in windows {
             guard let owner = item[kCGWindowOwnerPID as String] as? NSNumber,
                   owner.int32Value == app.processIdentifier,
@@ -536,12 +537,9 @@ private final class Overlay: NSObject, NSApplicationDelegate {
                 width: width.doubleValue,
                 height: height.doubleValue
             )
-            let frame = appKitWindowFrame(cgFrame: cgFrame, referenceMaxY: referenceMaxY)
-            if isValidTargetWindow(frame) {
-                return frame
-            }
+            candidates.append(appKitWindowFrame(cgFrame: cgFrame, referenceMaxY: referenceMaxY))
         }
-        return nil
+        return preferredTargetWindowFrame(candidates)
     }
 
     /// Selects the NSScreen that overlaps the target window the most.

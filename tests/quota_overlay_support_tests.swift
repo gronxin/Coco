@@ -29,6 +29,7 @@ private func item(_ title: String, status: String = "queued", position: Int) -> 
 private struct OverlaySupportTests {
     static func main() {
         testWindowValidation()
+        testPreferredTargetWindow()
         testCoordinateConversion()
         testAnchorsAndClamping()
         testOverlayHitRouting()
@@ -45,6 +46,39 @@ private struct OverlaySupportTests {
                     "narrow target window is invalid")
         assertEqual(isValidTargetWindow(CGRect(x: 0, y: 0, width: 120, height: 119)), false,
                     "short target window is invalid")
+    }
+
+    private static func testPreferredTargetWindow() {
+        let small = CGRect(x: 476, y: 158, width: 332, height: 234)
+        let mainWindow = CGRect(x: 57, y: 92, width: 1090, height: 760)
+        assertEqual(
+            preferredTargetWindowFrame([small, mainWindow]),
+            mainWindow,
+            "largest Codex window anchors the overlay"
+        )
+        assertEqual(
+            preferredTargetWindowFrame([mainWindow, small]),
+            mainWindow,
+            "order does not affect the chosen window"
+        )
+        assertEqual(
+            preferredTargetWindowFrame([small]),
+            small,
+            "a single valid window is used"
+        )
+        assertEqual(
+            preferredTargetWindowFrame([CGRect(x: 0, y: 0, width: 119, height: 119)]),
+            nil,
+            "invalid windows are rejected"
+        )
+        assertEqual(preferredTargetWindowFrame([]), nil, "no candidates yields nil")
+        let tied = CGRect(x: 10, y: 20, width: 400, height: 400)
+        let tiedToo = CGRect(x: 900, y: 20, width: 400, height: 400)
+        assertEqual(
+            preferredTargetWindowFrame([tied, tiedToo]),
+            tied,
+            "an area tie keeps the earliest candidate"
+        )
     }
 
     private static func testCoordinateConversion() {

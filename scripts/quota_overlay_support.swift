@@ -33,6 +33,20 @@ func isValidTargetWindow(_ frame: CGRect) -> Bool {
     frame.width >= 120 && frame.height >= 120
 }
 
+/// Selects the Codex window that should anchor the overlay controls.
+///
+/// Codex exposes several layer-zero windows at once (for example the `Computer Use`
+/// panels alongside the main editor window), so taking the first match would anchor
+/// the overlay to an arbitrary small panel. Choosing the largest valid frame keeps
+/// the controls attached to the main window; ties keep the earliest candidate.
+func preferredTargetWindowFrame(_ frames: [CGRect]) -> CGRect? {
+    let ranked = frames.filter(isValidTargetWindow).map { frame -> (frame: CGRect, area: CGFloat) in
+        (frame, frame.width * frame.height)
+    }
+    guard let largestArea = ranked.map(\.area).max() else { return nil }
+    return ranked.first { $0.area == largestArea }?.frame
+}
+
 /// Converts a CoreGraphics top-left-origin window frame into AppKit's bottom-left coordinates.
 func appKitWindowFrame(cgFrame: CGRect, referenceMaxY: CGFloat) -> CGRect {
     CGRect(
