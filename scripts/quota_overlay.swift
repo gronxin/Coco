@@ -272,6 +272,7 @@ private final class QuotaView: NSView {
 
 private final class NavigationButtonView: NSView {
     var onToggle: (() -> Void)?
+    var onQuit: (() -> Void)?
     var overlayVisible = false { didSet { needsDisplay = true } }
 
     override var isOpaque: Bool { false }
@@ -312,6 +313,19 @@ private final class NavigationButtonView: NSView {
         queue.lineCapStyle = .round
         NSColor(calibratedWhite: 0.87, alpha: 1).setStroke()
         queue.stroke()
+    }
+
+    /// Shows a context menu on right-click offering to quit the overlay.
+    override func rightMouseUp(with event: NSEvent) {
+        let menu = NSMenu()
+        let quit = NSMenuItem(title: "退出额度浮窗", action: #selector(quitTapped), keyEquivalent: "")
+        quit.target = self
+        menu.addItem(quit)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func quitTapped() {
+        onQuit?()
     }
 
     /// Toggles the overlay without activating this accessory application.
@@ -380,6 +394,9 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         navigationContent.onToggle = { [weak self] in
             self?.toggleOverlayVisibility()
         }
+        navigationContent.onQuit = { [weak self] in
+            self?.quitOverlay()
+        }
         content.onToggleQueue = { [weak self] in
             self?.toggleQueueCollapsed()
         }
@@ -413,6 +430,23 @@ private final class Overlay: NSObject, NSApplicationDelegate {
         stopTracking()
         dataTimer?.invalidate()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    /// Uninstalls the overlay LaunchAgent (so launchd will not relaunch it) and
+    /// quits this process. The backend service and menu bar app keep running.
+    private func quitOverlay() {
+        let label = "local.codex-token-analyzer.overlay"
+        // Remove the plist first: bootout may SIGTERM this very process, and if it
+        // dies before the plist is gone, launchd KeepAlive would relaunch it.
+        let plist = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+        try? FileManager.default.removeItem(at: plist)
+        let bootout = Process()
+        bootout.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        bootout.arguments = ["bootout", "gui/\(getuid())/\(label)"]
+        try? bootout.run()
+        bootout.waitUntilExit()
+        NSApp.terminate(nil)
     }
 
     /// Creates one borderless panel with the shared overlay behavior.
