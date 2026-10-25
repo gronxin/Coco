@@ -95,7 +95,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "Coco"
+        if let icon = NSApplication.shared.applicationIconImage {
+            let menuIcon = (icon.copy() as? NSImage) ?? icon
+            menuIcon.size = NSSize(width: 18, height: 18)
+            menuIcon.isTemplate = false
+            statusItem.button?.image = menuIcon
+        } else {
+            statusItem.button?.title = "Coco"
+        }
         rebuildMenu()
         bootstrapIfNeeded()
         openPanelWhenReady()

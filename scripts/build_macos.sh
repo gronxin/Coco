@@ -21,6 +21,7 @@ APP_NAME="Coco.app"
 DMG_NAME="Coco.dmg"
 BUILD="build"
 APP="$BUILD/$APP_NAME"
+ICON_BASENAME="Coco"
 UNSIGNED=0
 UNIVERSAL=0
 SKIP_FRONTEND=0
@@ -79,6 +80,14 @@ swiftc ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} ${MACHO_TARGETS[@]+"${MACHO_TARGETS[@
 echo "==> 5/7 组装 .app bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+# App icon (from committed master, or regenerate if missing).
+if [ ! -f "assets/$ICON_BASENAME.icns" ]; then
+  echo "    生成 App 图标"
+  swiftc scripts/make_icon.swift -o "$BUILD/make_icon"
+  "$BUILD/make_icon" "$BUILD/icon"
+  cp "$BUILD/icon/$ICON_BASENAME.icns" "assets/$ICON_BASENAME.icns"
+fi
+cp "assets/$ICON_BASENAME.icns" "$APP/Contents/Resources/$ICON_BASENAME.icns"
 cp "$BUILD/Coco" "$APP/Contents/MacOS/Coco"
 ditto "$BUILD/dist/CocoBackend" "$APP/Contents/Resources/backend"
 cp "$BUILD/codex-quota-overlay" "$APP/Contents/Resources/codex-quota-overlay"
@@ -93,6 +102,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>local.codex-token-analyzer</string>
     <key>CFBundleName</key><string>Coco</string>
     <key>CFBundleDisplayName</key><string>Coco Codex管家</string>
+    <key>CFBundleIconFile</key><string>Coco</string>
     <key>CFBundleExecutable</key><string>Coco</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -134,7 +144,22 @@ STAGE="$BUILD/dmg_stage"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
+# Finder volume icon for the mounted DMG.
+cp "assets/$ICON_BASENAME.icns" "$STAGE/.VolumeIcon.icns"
 hdiutil create -volname "Coco Codex管家" -srcfolder "$STAGE" -ov -format UDZO "$BUILD/$DMG_NAME" >/dev/null
+# Stamp the volume-icon custom-icon bit (needs a re-master for UDZO).
+if SetFile -a C "$BUILD/$DMG_NAME" 2>/dev/null; then
+  :
+else
+  MOUNT_POINT="$BUILD/dmg_mount"
+  rm -rf "$MOUNT_POINT"; mkdir -p "$MOUNT_POINT"
+  if hdiutil attach "$BUILD/$DMG_NAME" -nobrowse -noautoopen -mountpoint "$MOUNT_POINT" >/dev/null 2>&1; then
+    cp "assets/$ICON_BASENAME.icns" "$MOUNT_POINT/.VolumeIcon.icns"
+    SetFile -a C "$MOUNT_POINT" 2>/dev/null || true
+    sync
+    hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
+  fi
+fi
 if [ "$UNSIGNED" = 0 ]; then
   # Sign the DMG itself so Gatekeeper has a usable signature on the downloaded image.
   codesign --force --timestamp --sign "$COCO_SIGN_IDENTITY" "$BUILD/$DMG_NAME"
