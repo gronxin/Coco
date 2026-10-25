@@ -42,7 +42,7 @@
 macOS / Linux：
 
 ```bash
-git clone https://github.com/gronxin/codex-token-analyzer.git
+git clone https://github.com/gronxin/Coco.git
 cd codex-token-analyzer
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
@@ -53,7 +53,7 @@ cd frontend && npm ci && npm run build && cd ..
 Windows PowerShell：
 
 ```powershell
-git clone https://github.com/gronxin/codex-token-analyzer.git
+git clone https://github.com/gronxin/Coco.git
 cd codex-token-analyzer
 py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt

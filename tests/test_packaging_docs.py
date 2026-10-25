@@ -22,4 +22,4 @@ def test_readme_has_no_placeholders_or_signing_creds():
         "CocoNotary",
     ):
         assert forbidden not in text, f"README should not contain {forbidden!r}"
-    assert "https://github.com/gronxin/codex-token-analyzer.git" in text
+    assert "https://github.com/gronxin/Coco.git" in text

@@ -13,8 +13,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/gronxin/codex-token-analyzer"
-Issues = "https://github.com/gronxin/codex-token-analyzer/issues"
+Repository = "https://github.com/gronxin/Coco"
+Issues = "https://github.com/gronxin/Coco/issues"
 
 [project.optional-dependencies]
 dev = ["pytest==8.4.2"]
