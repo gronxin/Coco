@@ -6,12 +6,13 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 artifacts/
-build/
-dist/
+/build/
+/dist/
 *.dmg
 *.sqlite*
 .DS_Store
 *.pid
 *.tsbuildinfo
+.claude/
 .superpowers/
 docs/superpowers/

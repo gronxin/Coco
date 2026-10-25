@@ -15,13 +15,6 @@
 - 任务队列：开启后自动扫描本机未归档主任务的最新轮次；明确因额度耗尽中断的原任务，在额度恢复后先逐一续接，再派发队列新任务。添加任务时可按最近项目选择工作目录，再指定该项目中的任务窗口，把新指令排入原对话的后续轮次；也可新建对话。额度有余量就继续使用，不预留比例；支持队列默认模型、逐任务模型与思考深度及运行记录。功能默认关闭，关闭后当前任务完成，但不再监控和派发。
 - 浅色与深色主题、响应式布局和基础无障碍支持。
 
-## 运行条件
-
-- Windows、macOS 或 Linux。
-- Python 3.11 或更高版本。
-- Node.js 20 或更高版本。
-- 已在本机使用 Codex，默认数据目录为 `~/.codex`。
-
 ## 下载安装（macOS）
 
 面向 macOS 的可双击安装包，无需自行准备 Python、Node 或 Xcode。
@@ -40,14 +33,14 @@
 
 卸载：菜单栏选择「完全卸载」，会移除两个 LaunchAgent；本地数据默认保留，可再选择同时删除。
 
-> 打包产物由 `scripts/build_macos.sh` 生成。发布前用 `COCO_SIGN_IDENTITY` 与 `NOTARY_PROFILE` 走签名/公证；本地验证加 `--unsigned`。
+## 从源码运行
 
-## 安装与启动
+源码运行需要：Windows、macOS 或 Linux；Python 3.11+；Node.js 20+；已在本机使用 Codex（默认数据目录 `~/.codex`）。若只是使用 macOS 安装包，请忽略本节。
 
 macOS / Linux：
 
 ```bash
-git clone <你的仓库地址>
+git clone https://github.com/gronxin/codex-token-analyzer.git
 cd codex-token-analyzer
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
@@ -58,7 +51,7 @@ cd frontend && npm ci && npm run build && cd ..
 Windows PowerShell：
 
 ```powershell
-git clone <你的仓库地址>
+git clone https://github.com/gronxin/codex-token-analyzer.git
 cd codex-token-analyzer
 py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
@@ -135,7 +128,7 @@ Windows 实现已在 macOS 开发环境完成纯逻辑、Win32 假后端、HTTP 
 cd frontend && npm ci && npm run build && npm audit --omit=dev
 ```
 
-真实数据审计读取本机日志；运行前请确认数据目录。详细结果见 [验收记录](docs/verification.md)，贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题见 [SECURITY.md](SECURITY.md)。
+真实数据审计读取本机日志；运行前请确认数据目录。详细结果见 [验收记录](docs/verification.md)，贡献方式与 **macOS 安装包构建/签名/公证流程**见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题见 [SECURITY.md](SECURITY.md)。
 
 ## 已知限制
 
